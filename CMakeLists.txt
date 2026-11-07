@@ -79,6 +79,7 @@ endfunction()
 
 if(SPSX_BUILD_TOOLS)
     add_subdirectory(tools/render_cli)
+    add_subdirectory(tools/snapshot)
 endif()
 
 if(SPSX_BUILD_TESTS)

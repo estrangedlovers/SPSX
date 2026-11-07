@@ -128,7 +128,9 @@ namespace spsx::edit
 
     std::optional<PadSettings> MarkSession::padStopped()
     {
-        if (mode == Mode::startOnly && pendingStart)
+        // A start point was marked and the pad stopped before a second press: that is the
+        // manual's "adjusting only the start point" flow (p. 28).
+        if (mode != Mode::endOnly && pendingStart)
             return finish (*pendingStart, base.end);
         return std::nullopt;
     }

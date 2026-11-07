@@ -1,202 +1,321 @@
 #include "PluginEditor.h"
+#include "../ui/PanelLayout.h"
 
 namespace spsx
 {
-    class PluginEditor::PadView final : public juce::Component
+    PluginEditor::PluginEditor (PluginProcessor& p)
+        : AudioProcessorEditor (p), proc (p), model (p.getPanel()),
+          panel (p.getPanel()), side (p.getPanel(), p.getController(), p.getEngine())
     {
-    public:
-        PadView (PluginEditor& o, int i) : owner (o), index (i) {}
+        addAndMakeVisible (panel);
+        addChildComponent (side);
 
-        void paint (juce::Graphics& g) override
+        for (auto* b : { &authenticButton, &extendedButton })
         {
-            const auto id = owner.padAt (index);
-            const bool loaded = ! owner.proc.getController().project().slot (id).isEmpty();
-            const bool playing = owner.proc.getEngine().playPosition (id) >= 0;
-            auto r = getLocalBounds().toFloat().reduced (3.0f);
-            g.setColour (playing ? juce::Colour (0xffe03030) : loaded ? juce::Colour (0xff7a2a2a) : juce::Colour (0xff3a3a3a));
-            g.fillRoundedRectangle (r, 6.0f);
-            if (id == owner.current)
-            {
-                g.setColour (juce::Colours::white.withAlpha (0.6f));
-                g.drawRoundedRectangle (r, 6.0f, 2.0f);
-            }
-            g.setColour (juce::Colours::white);
-            g.drawText (juce::String (index + 1), r, juce::Justification::centred);
-        }
-
-        void mouseDown (const juce::MouseEvent&) override
-        {
-            owner.current = owner.padAt (index);
-            Command c;
-            c.type = Command::Type::padDown;
-            c.pad = owner.current;
-            owner.proc.getEngine().post (c);
-            owner.refreshModeButtons();
-        }
-
-        void mouseUp (const juce::MouseEvent&) override
-        {
-            Command c;
-            c.type = Command::Type::padUp;
-            c.pad = owner.padAt (index);
-            owner.proc.getEngine().post (c);
-        }
-
-    private:
-        PluginEditor& owner;
-        int index;
-    };
-
-    PluginEditor::PluginEditor (PluginProcessor& p) : AudioProcessorEditor (p), proc (p)
-    {
-        for (int i = 0; i < kPadsPerBank; ++i)
-            addAndMakeVisible (pads.add (new PadView (*this, i)));
-
-        for (int b = 0; b < kAuthenticBanks; ++b)
-        {
-            auto* btn = bankButtons.add (new juce::TextButton (juce::String::charToString ((juce::juce_wchar) ('A' + b))));
-            btn->setClickingTogglesState (false);
-            btn->onClick = [this, b] { bank = b; current = { b, current.pad }; refreshModeButtons(); repaint(); };
-            addAndMakeVisible (btn);
-        }
-
-        int which = 0;
-        for (auto* b : { &gate, &loop, &reverse, &lofi })
-        {
-            b->setClickingTogglesState (false);
-            b->onClick = [this, which] { toggleMode (which); };
+            b->setRadioGroupId (1);
+            b->setClickingTogglesState (true);
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd04020));
+            b->setWantsKeyboardFocus (false);
             addAndMakeVisible (b);
-            ++which;
         }
+        authenticButton.setToggleState (! proc.isExtended(), juce::dontSendNotification);
+        extendedButton.setToggleState (proc.isExtended(), juce::dontSendNotification);
+        authenticButton.onClick = [this] { if (authenticButton.getToggleState()) proc.setExtended (false); };
+        extendedButton.onClick  = [this] { if (extendedButton.getToggleState())  proc.setExtended (true); };
 
-        hold.onStateChange = [this]
-        {
-            if (hold.isDown())
-            {
-                Command c;
-                c.type = Command::Type::holdDown;
-                proc.getEngine().post (c);
-            }
-        };
-        sub.onStateChange = [this]
-        {
-            if (sub.isDown() != subWasDown)
-            {
-                subWasDown = sub.isDown();
-                Command c;
-                c.type = subWasDown ? Command::Type::subDown : Command::Type::subUp;
-                proc.getEngine().post (c);
-            }
-        };
-        stopAll.onClick = [this]
-        {
-            Command c;
-            c.type = Command::Type::stopAll;
-            proc.getEngine().post (c);
-        };
-        for (auto* b : { &hold, &sub, &stopAll })
-            addAndMakeVisible (b);
+        keysButton.setClickingTogglesState (true);
+        keysButton.setWantsKeyboardFocus (false);
+        keysButton.onClick = [this] { panel.setShowKeyLabels (keysButton.getToggleState()); };
+        addAndMakeVisible (keysButton);
 
-        volume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        volume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        volumeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.getParameters(), "volume", volume);
-        addAndMakeVisible (volume);
-
-        status.setText ("Phase 1 test UI: drop WAV/AIFF files on pads", juce::dontSendNotification);
+        status.setColour (juce::Label::textColourId, juce::Colour (0xff8d8e8a));
+        status.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (status);
 
-        setSize (640, 420);
-        refreshModeButtons();
-        startTimerHz (30);
+        // Key labels for the overlay.
+        std::map<Knob, juce::String> knobLabels { { Knob::ctrl1, "Left/Right" }, { Knob::volume, "- =" } };
+        panel.setKeyLabels (keyMap.labels(), knobLabels);
+
+        auto callbacks = PanelModel::Callbacks {};
+        callbacks.setVolume = [this] (double v)
+        {
+            if (auto* param = proc.getParameters().getParameter ("volume"))
+                param->setValueNotifyingHost ((float) v);
+        };
+        callbacks.freeBytes = []
+        {
+            return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getBytesFreeOnVolume();
+        };
+        callbacks.requestImport = [this] (PadId start) { openImportChooser (start); };
+        model.setCallbacks (callbacks);
+
+        proc.onModeChanged = [this]
+        {
+            authenticButton.setToggleState (! proc.isExtended(), juce::dontSendNotification);
+            extendedButton.setToggleState (proc.isExtended(), juce::dontSendNotification);
+            updateLayoutForMode();
+        };
+
+        setWantsKeyboardFocus (true);
+        setResizable (true, true);
+        setConstrainer (&constrainer);
+        updateLayoutForMode();
     }
 
-    PluginEditor::~PluginEditor() { stopTimer(); }
+    PluginEditor::~PluginEditor()
+    {
+        releaseAllKeys();
+        proc.onModeChanged = nullptr;
+        // Keep VOLUME and free-space callbacks; drop the one that needs this window.
+        auto callbacks = PanelModel::Callbacks {};
+        callbacks.setVolume = [&p = proc] (double v)
+        {
+            if (auto* param = p.getParameters().getParameter ("volume"))
+                param->setValueNotifyingHost ((float) v);
+        };
+        callbacks.freeBytes = []
+        {
+            return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getBytesFreeOnVolume();
+        };
+        model.setCallbacks (callbacks);
+    }
+
+    void PluginEditor::updateLayoutForMode()
+    {
+        const bool ext = proc.isExtended();
+        side.setVisible (ext);
+
+        // Keep the panel's 1000 x 1450 aspect; the side panel adds a fixed-width column
+        // scaled with the panel.
+        const double panelAspect = ui::PanelLayout::kWidth / ui::PanelLayout::kHeight;
+        const int panelH = getHeight() > kBarHeight ? getHeight() - kBarHeight : 812;
+        const int panelW = (int) std::round (panelH * panelAspect);
+        const int sideW = ext ? kSideWidth : 0;
+
+        constrainer.setMinimumSize ((int) (420 * panelAspect) + sideW, 420 + kBarHeight);
+        constrainer.setMaximumSize (4000, 4000);
+        // Aspect is approximate with the side panel: keep it on the panel part.
+        constrainer.setFixedAspectRatio ((double) (panelW + sideW) / (double) (panelH + kBarHeight));
+
+        setSize (panelW + sideW, panelH + kBarHeight);
+        resized();
+    }
 
     void PluginEditor::paint (juce::Graphics& g)
     {
-        g.fillAll (juce::Colour (0xff202020));
+        g.fillAll (juce::Colour (0xff101012));
+        g.setColour (juce::Colour (0xff1c1d20));
+        g.fillRect (getLocalBounds().removeFromTop (kBarHeight));
     }
 
     void PluginEditor::resized()
     {
-        auto r = getLocalBounds().reduced (10);
-        status.setBounds (r.removeFromBottom (24));
+        auto r = getLocalBounds();
+        auto bar = r.removeFromTop (kBarHeight).reduced (6, 4);
+        authenticButton.setBounds (bar.removeFromLeft (90));
+        extendedButton.setBounds (bar.removeFromLeft (90));
+        bar.removeFromLeft (8);
+        keysButton.setBounds (bar.removeFromLeft (80));
+        status.setBounds (bar);
 
-        auto top = r.removeFromTop (30);
-        for (auto* b : bankButtons)
-            b->setBounds (top.removeFromLeft (40).reduced (2));
-        volume.setBounds (top.removeFromRight (60));
-
-        r.removeFromTop (6);
-        auto modes = r.removeFromTop (30);
-        for (auto* b : { &gate, &loop, &reverse, &lofi })
-            b->setBounds (modes.removeFromLeft (90).reduced (2));
-
-        r.removeFromTop (6);
-        auto side = r.removeFromRight (120);
-        for (auto* b : { &hold, &sub, &stopAll })
-            b->setBounds (side.removeFromTop (side.getHeight() / 3).reduced (4));
-
-        const int w = r.getWidth() / 4, h = r.getHeight() / 3;
-        for (int i = 0; i < kPadsPerBank; ++i)
-            pads[i]->setBounds (r.getX() + (i % 4) * w, r.getY() + (i / 4) * h, w, h);
+        if (proc.isExtended())
+            side.setBounds (r.removeFromRight (kSideWidth));
+        panel.setBounds (r);
     }
 
-    void PluginEditor::filesDropped (const juce::StringArray& files, int x, int y)
+    void PluginEditor::onFrame()
     {
-        int start = 0;
-        for (int i = 0; i < pads.size(); ++i)
-            if (pads[i]->getBounds().contains (x, y))
-                start = i;
+        panel.refresh (now());
+        if (side.isVisible())
+            side.refresh();
+    }
 
-        // Like the hardware import: consecutive pads from the one under the cursor.
-        for (int i = 0; i < files.size() && start + i < kPadsPerBank; ++i)
+    // ---- keyboard ---------------------------------------------------------------------
+
+    bool PluginEditor::keyPressed (const juce::KeyPress& key)
+    {
+        const auto mods = key.getModifiers();
+        if (mods.isCommandDown())
+            return false;   // Cmd shortcuts (save/open/export/settings) arrive with projects (Phase 7/9)
+
+        const int code = key.getKeyCode();
+        const double t = now();
+
+        if (key.getTextCharacter() == '?' || (code == '/' && mods.isShiftDown()))
         {
-            const PadId id { bank, start + i };
-            proc.getController().loadFileAsync (id, juce::File (files[i]), [this, id] (SamplerController::Status s)
+            keysButton.setToggleState (! keysButton.getToggleState(), juce::sendNotification);
+            return true;
+        }
+
+        // Shift + Z X C V B: banks F..J in one press.
+        const char bankKeys[] = { 'Z', 'X', 'C', 'V', 'B' };
+        for (int i = 0; i < 5; ++i)
+        {
+            if (code == bankKeys[i])
             {
-                status.setText (s == SamplerController::Status::ok ? "Loaded pad " + juce::String (id.pad + 1)
-                                                                   : juce::String ("UnS: could not load file"),
+                model.selectBank (mods.isShiftDown() ? i + 5 : i, t);
+                return true;
+            }
+        }
+
+        // Knob selection and adjustment.
+        const Knob order[] = { Knob::ctrl1, Knob::ctrl2, Knob::ctrl3, Knob::volume };
+        auto indexOf = [&order] (Knob k) { for (int i = 0; i < 4; ++i) if (order[i] == k) return i; return 0; };
+        if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey)
+        {
+            const int i = (indexOf (selectedKnob) + (code == juce::KeyPress::rightKey ? 1 : 3)) % 4;
+            selectedKnob = order[i];
+            knobSelectionVisible = true;
+            panel.setSelectedKnob (selectedKnob);
+            return true;
+        }
+        if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
+        {
+            const double step = (mods.isShiftDown() ? 1.0 : 4.0) / 127.0;
+            const double dir = code == juce::KeyPress::upKey ? 1.0 : -1.0;
+            model.turn (selectedKnob, model.knob (selectedKnob) + dir * step, t);
+            knobSelectionVisible = true;
+            panel.setSelectedKnob (selectedKnob);
+            return true;
+        }
+        if (code == '-' || code == '=')
+        {
+            model.turn (Knob::volume, model.knob (Knob::volume) + (code == '=' ? 1.0 : -1.0) * 4.0 / 127.0, t);
+            return true;
+        }
+
+        // Held controls are handled in keyStateChanged; claim the key so the host ignores it.
+        return keyMap.controlFor (code).has_value();
+    }
+
+    bool PluginEditor::keyStateChanged (bool)
+    {
+        const double t = now();
+        bool handled = false;
+
+        for (auto& b : keyMap.bindings())
+        {
+            if (isBank (b.control))
+                continue;   // banks select on keyPressed (direct, with Shift for F..J)
+
+            const bool down = juce::KeyPress::isKeyCurrentlyDown (b.keyCode);
+            const bool wasDown = keysDown.count (b.keyCode) > 0;
+            if (down == wasDown)
+                continue;
+
+            // '/' with Shift is the overlay, not REMAIN.
+            if (b.control == Control::remain && down && juce::ModifierKeys::currentModifiers.isShiftDown())
+                continue;
+            if (down && juce::ModifierKeys::currentModifiers.isCommandDown())
+                continue;
+
+            handled = true;
+            if (down)
+            {
+                keysDown.insert (b.keyCode);
+                // Backspace and Delete share DEL: only one press.
+                if (b.control == Control::del && (keysDown.count (juce::KeyPress::backspaceKey) + keysDown.count (juce::KeyPress::deleteKey)) > 1)
+                    continue;
+                model.press (b.control, t);
+            }
+            else
+            {
+                keysDown.erase (b.keyCode);
+                if (b.control == Control::del && (keysDown.count (juce::KeyPress::backspaceKey) + keysDown.count (juce::KeyPress::deleteKey)) > 0)
+                    continue;
+                model.release (b.control, t);
+            }
+        }
+        if (handled)
+            panel.refresh (t);
+        return handled;
+    }
+
+    void PluginEditor::modifierKeysChanged (const juce::ModifierKeys& mods)
+    {
+        // Option = FUNC, held like the hardware button.
+        if (mods.isAltDown() != altDown)
+        {
+            altDown = mods.isAltDown();
+            if (altDown) model.press (Control::func, now());
+            else         model.release (Control::func, now());
+            panel.refresh (now());
+        }
+    }
+
+    void PluginEditor::releaseAllKeys()
+    {
+        const double t = now();
+        for (int code : keysDown)
+            if (auto c = keyMap.controlFor (code))
+                model.release (*c, t);
+        keysDown.clear();
+        if (altDown)
+        {
+            model.release (Control::func, t);
+            altDown = false;
+        }
+    }
+
+    void PluginEditor::focusLost (FocusChangeType)
+    {
+        // A key released while another window had focus would otherwise stay held.
+        releaseAllKeys();
+    }
+
+    // ---- import -----------------------------------------------------------------------
+
+    void PluginEditor::openImportChooser (PadId start)
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import audio files", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::canSelectMultipleItems,
+                              [this, start] (const juce::FileChooser& fc) { importFiles (start, fc.getResults()); });
+    }
+
+    void PluginEditor::importFiles (PadId start, juce::Array<juce::File> files)
+    {
+        // Like the hardware's IMPORT (p. 36): ASCII filename order, consecutive pads from
+        // the chosen one, protected banks skipped, at most 120 files.
+        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+        {
+            return a.getFileName().toStdString() < b.getFileName().toStdString();
+        });
+
+        auto& c = proc.getController();
+        int index = start.index();
+        int done = 0;
+        for (auto& f : files)
+        {
+            while (index < c.project().numBanks * kPadsPerBank && c.project().sampleBankProtected[(size_t) (index / kPadsPerBank)])
+                index += kPadsPerBank - index % kPadsPerBank;
+            if (index >= c.project().numBanks * kPadsPerBank || done >= 120)
+                break;
+
+            const auto pad = PadId::fromIndex (index++);
+            ++done;
+            c.loadFileAsync (pad, f, [this, pad] (SamplerController::Status s)
+            {
+                status.setText (s == SamplerController::Status::ok
+                                    ? "Loaded " + juce::String::charToString ((juce::juce_wchar) ('A' + pad.bank)) + juce::String (pad.pad + 1)
+                                    : juce::String ("UnS: could not load a file"),
                                 juce::dontSendNotification);
-                repaint();
             });
         }
     }
 
-    void PluginEditor::toggleMode (int which)
+    void PluginEditor::filesDropped (const juce::StringArray& files, int x, int y)
     {
-        proc.getController().editSettings (current, [which] (PadSettings& s)
-        {
-            switch (which)
-            {
-                case 0: s.gate = ! s.gate; break;
-                case 1: s.loop = ! s.loop; break;
-                case 2: s.reverse = ! s.reverse; break;
-                case 3: s.lofi = ! s.lofi; break;
-            }
-        });
-        refreshModeButtons();
-    }
+        // Drop onto a pad: load there and onwards (same rules as IMPORT).
+        const auto local = panel.getLocalPoint (this, juce::Point<int> (x, y)).toFloat();
+        const auto logical = local.transformedBy (panel.toScreen().inverted());
+        int padIndex = 0;
+        if (auto* g = ui::PanelLayout::get().controlAt (logical); g != nullptr && isPad (g->control))
+            padIndex = spsx::padIndex (g->control);
 
-    void PluginEditor::refreshModeButtons()
-    {
-        const auto* s = proc.getController().settings (current);
-        const bool has = s != nullptr && ! proc.getController().project().slot (current).isEmpty();
-        auto lit = [] (juce::TextButton& b, bool on)
-        {
-            b.setColour (juce::TextButton::buttonColourId, on ? juce::Colour (0xffd04020) : juce::Colour (0xff404040));
-        };
-        lit (gate, has && s->gate);
-        lit (loop, has && s->loop);
-        lit (reverse, has && s->reverse);
-        lit (lofi, has && s->lofi);
-        for (int b = 0; b < bankButtons.size(); ++b)
-            lit (*bankButtons[b], b == bank);
-    }
-
-    void PluginEditor::timerCallback()
-    {
-        for (auto* p : pads)
-            p->repaint();
+        juce::Array<juce::File> list;
+        for (auto& f : files)
+            list.add (juce::File (f));
+        importFiles ({ model.bank(), padIndex }, list);
     }
 }

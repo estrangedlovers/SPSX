@@ -7,6 +7,13 @@ target_sources(SPSX PRIVATE
     core/sampler/StretchRenderer.cpp
     core/state/Project.cpp
     core/SamplerController.cpp
+    core/ui_model/Controls.cpp
+    core/ui_model/DisplayText.cpp
+    core/ui_model/PanelModel.cpp
+    ui/PanelLayout.cpp
+    ui/PanelComponent.cpp
+    ui/KeyMap.cpp
+    ui/SidePanel.cpp
     plugin/PluginProcessor.cpp
     plugin/PluginEditor.cpp)
 

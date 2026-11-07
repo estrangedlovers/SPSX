@@ -3,6 +3,7 @@
 #include "../core/engine/Engine.h"
 #include "../core/engine/EngineHost.h"
 #include "../core/SamplerController.h"
+#include "../core/ui_model/PanelModel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace spsx
@@ -38,16 +39,26 @@ namespace spsx
         void setStateInformation (const void* data, int sizeInBytes) override;
 
         Engine& getEngine() noexcept { return engine; }
+        PanelModel& getPanel() noexcept { return panel; }
+
+        /** Authentic (hardware limits) or Extended mode. Message thread. */
+        void setExtended (bool shouldBeExtended);
+        bool isExtended() const noexcept { return extended; }
+        std::function<void()> onModeChanged;
+
+        static double nowSeconds() noexcept { return juce::Time::getMillisecondCounterHiRes() * 0.001; }
         SamplerController& getController() noexcept { return controller; }
         juce::AudioProcessorValueTreeState& getParameters() noexcept { return params; }
 
     private:
-        void timerCallback() override { controller.tick(); }
+        void timerCallback() override;
         static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
         Engine engine;
         EngineHost host { engine };
         SamplerController controller { engine, Limits::authentic() };
+        PanelModel panel { engine, controller };
+        bool extended = false;
         juce::AudioProcessorValueTreeState params;
         std::atomic<float>* volumeParam = nullptr;
         float lastVolume = -1.0f;

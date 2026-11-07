@@ -2,6 +2,8 @@
 
 A recreation of a classic 2009 12-pad phrase sampler with a 7-segment display, built with JUCE as a macOS standalone app plus AU and VST3 plugins (Linux builds too). Authentic mode follows the hardware's behaviour and limits; Extended mode adds features for finishing songs.
 
+![SPSX panel](docs/images/panel.png)
+
 Status: preview. See `docs/PROGRESS.md` for the current phase and `docs/PLAN.md` for the roadmap.
 
 ## Download

@@ -70,6 +70,16 @@ tools/
 
 The **PanelModel** is the central idea. It is a pure state machine that receives `Command`s (button down/up, pad down/up, knob moved, time tick) and produces (a) engine messages and (b) a `PanelView` snapshot (each LED's state, display glyphs, pad lights). It has no JUCE GUI dependency, so it is unit-testable: a test can script "hold FUNC, press pad 8, turn CTRL 3, press REC" and assert the display shows `L.on` and the setting changed. Mouse, keyboard, MIDI learn and tests all feed the same command stream, which keeps "holding a key behaves like holding the hardware button" true by construction.
 
+### UI layer (Phase 2)
+
+- `core/ui_model/PanelModel` is the panel state machine. Input is `press/release(Control)`, `turn(Knob, 0..1)` and `tick(now)`, all with explicit time, so every flow is scripted in `tests/TestPanelModel.cpp`. Output is a `PanelView` value (LED states, display cells, illumination), compared by value so the UI repaints only on change.
+- `ui/PanelLayout` holds every control's geometry in logical units (1000 x 1450, the hardware's aspect). Drawing, hit-testing and the key overlay all read it.
+- `ui/PanelComponent` draws the panel with vector paths. Static artwork is cached in an image at physical resolution and rebuilt on resize; LEDs, pads, knobs and the 7-segment display are drawn live. `refresh(now)` runs from a `VBlankAttachment` and repaints only when the view or a blink phase changed.
+- `ui/KeyMap` maps keys to controls. Key down/up become press/release (held keys hold buttons); Option is FUNC; Shift + Z..B selects banks F..J directly. Shift-click latches a button so mouse users can do two-handed combinations.
+- `ui/SidePanel` (Extended only): pad info, waveform editor with draggable start/end and playhead, pattern view placeholder.
+- The processor owns the `PanelModel`, so panel state survives closing the plugin window. Its 30 Hz timer calls `tick`.
+- `tools/snapshot` (`panel_snapshot`) renders the panel to PNG without a display, for review and docs.
+
 ## 3. Authentic vs Extended
 
 A single `Limits` struct is read by engine and model code:

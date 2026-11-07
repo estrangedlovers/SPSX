@@ -1,16 +1,18 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "../ui/PanelComponent.h"
+#include "../ui/SidePanel.h"
+#include "../ui/KeyMap.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <set>
 
 namespace spsx
 {
-    /** Phase 1 test editor: a plain pad grid for trying the engine by hand. Drop audio
-        files on a pad to load them; click (and hold, for GATE) to play. The hardware
-        panel replaces this in Phase 2. */
+    /** Main window: a slim top bar, the hardware panel and, in Extended mode, the side
+        panel. Keyboard input maps to panel controls (ui::KeyMap); held keys hold buttons. */
     class PluginEditor final : public juce::AudioProcessorEditor,
-                               public juce::FileDragAndDropTarget,
-                               private juce::Timer
+                               public juce::FileDragAndDropTarget
     {
     public:
         explicit PluginEditor (PluginProcessor&);
@@ -19,28 +21,43 @@ namespace spsx
         void paint (juce::Graphics&) override;
         void resized() override;
 
+        bool keyPressed (const juce::KeyPress&) override;
+        bool keyStateChanged (bool isKeyDown) override;
+        void modifierKeysChanged (const juce::ModifierKeys&) override;
+        void focusLost (FocusChangeType) override;
+
         bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
         void filesDropped (const juce::StringArray& files, int x, int y) override;
 
     private:
-        class PadView;
+        static constexpr int kBarHeight = 34;
+        static constexpr int kSideWidth = 360;
+        static constexpr int kPanelBaseWidth = 560;
 
-        void timerCallback() override;
-        PadId padAt (int index) const noexcept { return { bank, index }; }
-        void refreshModeButtons();
-        void toggleMode (int which);
+        void onFrame();
+        void updateLayoutForMode();
+        void importFiles (PadId start, juce::Array<juce::File> files);
+        void openImportChooser (PadId start);
+        void releaseAllKeys();
+        double now() const { return PluginProcessor::nowSeconds(); }
 
         PluginProcessor& proc;
-        int bank = 0;
-        PadId current = { 0, 0 };
-        juce::OwnedArray<PadView> pads;
-        juce::OwnedArray<juce::TextButton> bankButtons;
-        juce::TextButton gate { "GATE" }, loop { "LOOP" }, reverse { "REVERSE" }, lofi { "LO-FI" };
-        juce::TextButton hold { "HOLD" }, sub { "SUB PAD" }, stopAll { "STOP ALL" };
-        juce::Slider volume;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> volumeAttachment;
+        PanelModel& model;
+        ui::PanelComponent panel;
+        ui::SidePanel side;
+        ui::KeyMap keyMap = ui::KeyMap::defaults();
+
+        juce::TextButton authenticButton { "Authentic" }, extendedButton { "Extended" }, keysButton { "Keys  ?" };
         juce::Label status;
-        bool subWasDown = false;
+
+        std::set<int> keysDown;
+        bool altDown = false;
+        Knob selectedKnob = Knob::ctrl1;
+        bool knobSelectionVisible = false;
+
+        std::unique_ptr<juce::FileChooser> chooser;
+        juce::ComponentBoundsConstrainer constrainer;
+        juce::VBlankAttachment vblank { this, [this] { onFrame(); } };
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
     };

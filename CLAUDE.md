@@ -19,13 +19,16 @@ ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "
 - Xcode: `cmake -S . -B build-xcode -G Xcode`. Universal macOS binary: add `-DSPSX_UNIVERSAL=ON`.
 - Linux needs: libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libjack-jackd2-dev.
 - Artefacts: `build/SPSX_artefacts/<Config>/{Standalone,VST3,AU}`.
+- Panel screenshot without a display: `build/tools/snapshot/panel_snapshot --out p.png [--extended] [--pad A1=kick.wav] [--script "press A1; turn ctrl3 0.7"]`.
 - Headless render: `build/tools/render_cli/render_cli --pad A1=kick.wav --script hits.txt --out out.wav --rate 48000` (script format at the top of `tools/render_cli/main.cpp`).
 
 ## Layout
 - `src/core/`: everything testable without a GUI. `engine/` (Engine, EngineHost, Voice, VoicePool), `dsp/` (SincResampler, LoFi, GranularStretcher), `sampler/` (SampleEdit, TimeModify, StretchRenderer), `state/` (SampleData, PadSettings, Project), `io/` (AudioFileIO), `SamplerController` (message-thread facade), `Limits.h`, `Tempo.h`, `CancelDetector.h`, `RealtimeGuard.h`.
-- `src/plugin/`: AudioProcessor + editor (Phase 1 editor is a temporary test UI).
+- `src/core/ui_model/`: PanelModel (panel state machine), Controls, DisplayText (7-segment glyphs).
+- `src/ui/`: PanelLayout (geometry), PanelComponent (drawing + mouse), KeyMap, SidePanel (Extended).
+- `src/plugin/`: AudioProcessor (owns Engine, SamplerController, PanelModel) + editor.
 - `tests/`: Catch2; `AllocGuard.cpp` replaces operator new in the test binary to catch audio-thread allocations.
-- `tools/`: `render_cli`, `slicer_patterns.py`, `fetch_manual.sh`.
+- `tools/`: `render_cli`, `snapshot`, `slicer_patterns.py`, `fetch_manual.sh`.
 
 ## Conventions
 - Process: work phase by phase. End of phase: clean build, tests pass, update `docs/PROGRESS.md`, commit, **stop and wait for review**.
@@ -35,5 +38,6 @@ ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "
 - Tests compare floats exactly where a path is meant to be bit-exact; `-Wfloat-equal` is off for tests only. In `src/` use `juce::exactlyEqual` for intentional exact compares.
 - JUCE style: 4-space indent, space before call parentheses, `juce::` qualified, braces on new lines.
 - No vendor logos, wordmarks or the hardware's product name in UI, bundle ID or assets.
+- UI: all panel behaviour goes in PanelModel (tested); components only draw and forward input.
 - Docs: no em dashes.
 - Dependencies: check licenses first; Rubber Band and Ableton Link need owner approval.

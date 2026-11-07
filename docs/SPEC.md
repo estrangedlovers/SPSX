@@ -711,4 +711,11 @@ Implications: no MIDI out of any kind; no CC; Note Off is not recognized (U6); A
 | U24 | Default GATE/LOOP/REVERSE/LO-FI for a new sample | All off; LEVEL 127 (documented); region = whole sample **[assumed]** |
 | U25 | LEVEL curve | Linear gain level/127 **[assumed]** |
 | U26 | Fades at stop, steal and loop points | 2 ms linear fade on stop/steal; no fade-in, no loop crossfade (keeps the hardware's possible clicks) **[assumed]** |
-| U27 | BPM display resolution for samples | 0.1 BPM internally; display format decided in Phase 2 **[assumed]** |
+| U27 | BPM display resolution for samples | 0.1 BPM internally; shown as `98.5` below 100 and as an integer from 100 **[assumed]** |
+| U28 | What the display shows when idle | Sample mode: the current pad's BPM (`---` for an empty pad). Pattern mode: `Ptn` (documented) **[assumed for sample mode]** |
+| U29 | How long a turned knob's value stays on the display | 1.5 s, then back to the idle display; entering a mode clears it at once **[assumed]** |
+| U30 | Display units for START/END fine adjust | Offset from the knob centre in tens of milliseconds, `-13`..`13` (the manual only says centre shows `0`) **[assumed]** |
+| U31 | MFX button: toggle on press or release? | On release, and only when MFX was not used as a modifier (MFX + pad / CTRL 3) in between, so selecting a type never toggles the effect **[assumed]** |
+| U32 | HOLD and SUB PAD LEDs | Lit while pressed **[assumed]** |
+| U33 | Display during PAUSE | Unchanged **[assumed]** |
+| U34 | Effect knob values when switching effects | Each effect remembers its own CTRL 1..3 values; the physical knob position is only the last value turned **[assumed]** |

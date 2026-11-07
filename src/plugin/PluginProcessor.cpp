@@ -10,12 +10,43 @@ namespace spsx
           params (*this, nullptr, "SPSX", createLayout())
     {
         volumeParam = params.getRawParameterValue ("volume");
+
+        PanelModel::Callbacks cb;
+        cb.setVolume = [this] (double v)
+        {
+            if (auto* p = params.getParameter ("volume"))
+                p->setValueNotifyingHost ((float) v);
+        };
+        cb.freeBytes = []
+        {
+            return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getBytesFreeOnVolume();
+        };
+        panel.setCallbacks (cb);
+        panel.setKnobPosition (Knob::volume, volumeParam->load());
         startTimerHz (30);
     }
 
     PluginProcessor::~PluginProcessor()
     {
         stopTimer();
+    }
+
+    void PluginProcessor::timerCallback()
+    {
+        controller.tick();
+        panel.tick (nowSeconds());
+        // Keep the VOLUME knob in step with host automation.
+        panel.setKnobPosition (Knob::volume, volumeParam->load());
+    }
+
+    void PluginProcessor::setExtended (bool shouldBeExtended)
+    {
+        if (extended == shouldBeExtended)
+            return;
+        extended = shouldBeExtended;
+        controller.setLimits (extended ? Limits::extended() : Limits::authentic());
+        if (onModeChanged)
+            onModeChanged();
     }
 
     juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createLayout()
@@ -89,6 +120,7 @@ namespace spsx
         auto* root = new juce::DynamicObject();
         root->setProperty ("project", controller.project().toVar());
         root->setProperty ("volume", volumeParam->load());
+        root->setProperty ("extended", extended);
         const auto json = juce::JSON::toString (juce::var (root));
         destData.replaceAll (json.toRawUTF8(), json.getNumBytesAsUTF8());
     }
@@ -100,6 +132,7 @@ namespace spsx
         if (Project::fromVar (v.getProperty ("project", {}), p).failed())
             return;
 
+        setExtended ((bool) v.getProperty ("extended", false));
         if (auto* vol = params.getParameter ("volume"))
             vol->setValueNotifyingHost ((float) v.getProperty ("volume", 0.8));
 

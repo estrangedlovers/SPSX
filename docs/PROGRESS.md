@@ -1,5 +1,28 @@
 # PROGRESS
 
+## Phase 2: Hardware UI (status: done, awaiting review)
+
+### Done
+- **PanelModel** (`src/core/ui_model`): the hardware's button logic as a GUI-free state machine. Every SPEC flow with an engine behind it works from the panel: banks A..J, pads, SAMPLE MODE, START/END/LEVEL (CTRL 1/2 fine adjust, CTRL 3 level), TIME/BPM (pattern tempo on the stepped table, sample BPM halve/double, Time Modify), TAP TEMPO, MARK (start+end, start only, hold MARK + pad for end only, clear), DEL with multi-select, truncate (DEL, MARK, DEL), CANCEL + DEL, CANCEL + REMAIN format, FUNC 1..12, FUNC + REMAIN / CANCEL protect, FUNC + TAP pause, CANCEL x4, REMAIN (remaining time, current pad, effect targets, parameter presets), SLP sleep.
+- Effects panel state is complete (exclusive buttons, MFX type by MFX + pad, MFX + DJFX + pad and MFX + CTRL 3, EFFECT GRAB, last-effect blink, per-effect knob values, hidden FLANGER/PHASER balance). Phase 3 connects it to DSP.
+- **Panel UI** (`src/ui`): vector-drawn panel laid out from the manual's diagram, resizable and sharp at any scale, 7-segment display with the manual's glyphs, illumination ring, lit and blinking buttons and pads, knobs with drag, wheel, Shift fine and double-click to centre.
+- **Keyboard**: the full shortcut table; held keys hold buttons; Option = FUNC; Shift + Z..B = banks F..J; arrows select and turn knobs; `?` shows key labels on the panel. Shift-click latches a button for mouse-only combinations.
+- **Extended side panel**: pad info, waveform editor with draggable start/end and a live playhead, pattern view placeholder. Authentic/Extended switch in the top bar (saved with the plugin state).
+- Drag audio files onto a pad to import from there onwards (ASCII order, protected banks skipped), same as FUNC + 3.
+- `tools/snapshot` renders the panel headlessly; screenshots in `docs/images/`.
+- Tests: 86 test cases (30 new for the panel), all passing.
+
+### Known issues
+- Not yet seen on a real screen: this session has no display, so the UI was reviewed from headless renders. Please check it on your Mac (CI builds it).
+- Keyboard input inside a DAW depends on the host passing keys to the plugin window; the standalone app always gets them.
+- Buttons for later phases show `---` (REC sampling, RESAMPLE, EXT SOURCE) or `ENP` (backup load, pattern copy/exchange/delete).
+- New working decisions U28 to U34 in SPEC section 14 (idle display, value flash time, fine-adjust units, MFX toggle timing, LED details, effect knob memory).
+
+### Next
+Phase 3: effects (all 29, Effect Limit, Effect Grab, REMAIN targets, seamless switching).
+
+---
+
 ## Phase 1: Engine core (status: done, awaiting review)
 
 ### Done

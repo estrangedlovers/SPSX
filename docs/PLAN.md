@@ -22,15 +22,16 @@ Each phase ends with: clean build, tests green, `docs/PROGRESS.md` updated, comm
 - [x] Allocation guard in tests (zero allocations in Engine/EngineHost process)
 - [x] Phase 1 test editor (pad grid, drag-drop load, mode toggles)
 
-## Phase 2: Hardware UI
-1. PanelModel state machine for all SPEC flows that exist so far (others stubbed with display codes).
-2. Vector panel: layout from the manual diagram, resizable, Retina-sharp.
-3. SevenSegment with the manual's glyphs (incl. M glyph, dots).
-4. Pads with lit/blink, buttons with lit/blink, PEAK, illumination ring with tempo blink and red overload.
-5. Knobs: drag, scroll, Shift fine; centre-detent behaviour for START/END fine adjust.
-6. KeyMap defaults from the prompt table; modifiers held = hardware held; shortcut overlay (`?`).
-7. Extended side panels: waveform editor (draggable start/end), pad info, pattern note view.
-8. 60 fps via VBlankAttachment; UI reads AudioToUi FIFO only.
+## Phase 2: Hardware UI (done)
+- [x] PanelModel state machine: banks, pads, SAMPLE MODE, START/END/LEVEL, TIME/BPM, TAP TEMPO, MARK (3 flows), DEL / truncate / delete all / format, FUNC 1..12 (copy, exchange, import, auto trig, illumination + sleep, effect limit, MIDI ch/sync, input/output gain), protect, PAUSE, CANCEL x4, REMAIN (time, current pad, targets, presets), effect buttons (exclusive, MFX selection 3 ways, EFFECT GRAB, last-effect reminder), PATTERN SELECT / LENGTH / QUANTIZE values. Later-phase actions show display codes.
+- [x] Vector panel following the manual's diagram, resizable, cached static layer at physical resolution
+- [x] 7-segment display with the manual's glyphs, dots, busy dot, sleep chase; illumination ring (red/blue/off)
+- [x] Pads and buttons with lit/blink states, PEAK LED, knobs (drag, wheel, Shift fine, double-click centre)
+- [x] Keyboard map from the shortcut table; held keys hold buttons; Option = FUNC; overlay with key labels
+- [x] Extended side panel: pad info, waveform editor with draggable start/end, playhead; pattern view placeholder
+- [x] VBlank-driven refresh, repaint only on change
+- [x] panel_snapshot tool for headless screenshots
+- Deferred: backup load/save (needs projects, Phase 7); pattern copy/exchange/delete (Phase 5); sticker layer (Phase 8)
 
 ## Phase 3: Effects
 1. Shared DSP: ZDF SVF, oversampler (4x, polyphase IIR or FIR), delay lines, LFOs, smoothers, envelope followers, noise.
