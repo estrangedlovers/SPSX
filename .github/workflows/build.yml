@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release with this tag (e.g. v0.1.0). Leave empty for a plain build.'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -137,8 +142,12 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Either a pushed v* tag, or a manual run with release_tag set (GitHub then creates
+    # the tag at the built commit).
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: [macos, linux]
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -150,8 +159,8 @@ jobs:
       - name: Check tag matches CMake version
         run: |
           VERSION=$(grep -Eo 'project\(SPSX VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
-          TAG=${GITHUB_REF_NAME#v}
-          [ "${TAG%%-*}" = "$VERSION" ] || { echo "Tag $GITHUB_REF_NAME does not match CMake version $VERSION"; exit 1; }
+          TAG=${RELEASE_TAG#v}
+          [ "${TAG%%-*}" = "$VERSION" ] || { echo "Tag $RELEASE_TAG does not match CMake version $VERSION"; exit 1; }
 
       - uses: actions/download-artifact@v4
         with:
@@ -160,7 +169,9 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          name: SPSX ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: SPSX ${{ env.RELEASE_TAG }}
           body_path: docs/RELEASE_NOTES.md
-          prerelease: ${{ contains(github.ref_name, '-') || startsWith(github.ref_name, 'v0.') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') || startsWith(env.RELEASE_TAG, 'v0.') }}
           files: dist/*
