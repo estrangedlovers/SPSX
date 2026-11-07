@@ -17,7 +17,10 @@
 #include "core/engine/EngineHost.h"
 #include "core/SamplerController.h"
 #include "core/io/AudioFileIO.h"
+#include <algorithm>
 #include <iostream>
+#include <optional>
+#include <vector>
 
 using namespace spsx;
 

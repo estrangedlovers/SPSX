@@ -1,0 +1,166 @@
+name: Build, test and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  macos:
+    name: macOS (universal, AU + VST3 + Standalone)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-macos-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DSPSX_UNIVERSAL=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Ad-hoc sign bundles
+        run: |
+          ART=build/SPSX_artefacts/$BUILD_TYPE
+          for b in "$ART/AU/SPSX.component" "$ART/VST3/SPSX.vst3" "$ART/Standalone/SPSX.app"; do
+            codesign --force --deep --sign - "$b"
+            codesign --verify --deep --strict "$b"
+            lipo -info "$(find "$b/Contents/MacOS" -type f | head -1)"
+          done
+
+      - name: Install plugins and register AU
+        run: |
+          ART=build/SPSX_artefacts/$BUILD_TYPE
+          mkdir -p ~/Library/Audio/Plug-Ins/Components ~/Library/Audio/Plug-Ins/VST3
+          cp -R "$ART/AU/SPSX.component" ~/Library/Audio/Plug-Ins/Components/
+          cp -R "$ART/VST3/SPSX.vst3" ~/Library/Audio/Plug-Ins/VST3/
+          killall -9 AudioComponentRegistrar || true
+          auval -a | grep -i spsx
+          auval -strict -v aumu Spsx Spsx
+
+      - name: pluginval (strictness 10)
+        run: |
+          curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          PV=pluginval.app/Contents/MacOS/pluginval
+          $PV --strictness-level 10 --verbose --validate-in-process --output-dir pluginval-logs ~/Library/Audio/Plug-Ins/VST3/SPSX.vst3
+          $PV --strictness-level 10 --verbose --validate-in-process --output-dir pluginval-logs ~/Library/Audio/Plug-Ins/Components/SPSX.component
+
+      - name: Upload pluginval logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-logs
+          path: pluginval-logs
+          if-no-files-found: ignore
+
+      - name: Package
+        run: |
+          ART=build/SPSX_artefacts/$BUILD_TYPE
+          VERSION=$(grep -Eo 'project\(SPSX VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          mkdir -p dist/SPSX
+          cp -R "$ART/AU/SPSX.component" "$ART/VST3/SPSX.vst3" "$ART/Standalone/SPSX.app" dist/SPSX/
+          cp docs/RELEASE_NOTES.md dist/SPSX/README.md
+          (cd dist && ditto -c -k --sequesterRsrc --keepParent SPSX "SPSX-$VERSION-macOS.zip")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SPSX-macOS
+          path: dist/*.zip
+
+  linux:
+    name: Linux (VST3 + Standalone)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxcomposite-dev libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libjack-jackd2-dev
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-linux-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          ART=build/SPSX_artefacts/$BUILD_TYPE
+          VERSION=$(grep -Eo 'project\(SPSX VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          mkdir -p dist/SPSX
+          cp -R "$ART/VST3/SPSX.vst3" "$ART/Standalone/SPSX" dist/SPSX/
+          cp docs/RELEASE_NOTES.md dist/SPSX/README.md
+          tar -C dist -czf "dist/SPSX-$VERSION-Linux-x86_64.tar.gz" SPSX
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SPSX-Linux
+          path: dist/*.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Check tag matches CMake version
+        run: |
+          VERSION=$(grep -Eo 'project\(SPSX VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          TAG=${GITHUB_REF_NAME#v}
+          [ "${TAG%%-*}" = "$VERSION" ] || { echo "Tag $GITHUB_REF_NAME does not match CMake version $VERSION"; exit 1; }
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: SPSX ${{ github.ref_name }}
+          body_path: docs/RELEASE_NOTES.md
+          prerelease: ${{ contains(github.ref_name, '-') || startsWith(github.ref_name, 'v0.') }}
+          files: dist/*
