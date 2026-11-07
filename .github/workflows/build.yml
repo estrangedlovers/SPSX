@@ -174,4 +174,6 @@ jobs:
           name: SPSX ${{ env.RELEASE_TAG }}
           body_path: docs/RELEASE_NOTES.md
           prerelease: ${{ contains(env.RELEASE_TAG, '-') || startsWith(env.RELEASE_TAG, 'v0.') }}
-          files: dist/*
+          files: |
+            dist/*.zip
+            dist/*.tar.gz

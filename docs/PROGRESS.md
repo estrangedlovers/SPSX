@@ -17,15 +17,16 @@
 JUCE's float-to-16-bit WAV writer scales by 2^31-1 and truncates, losing one LSB on positive samples. `io::writeFile` now writes integer PCM itself so 16-bit samples round-trip bit for bit.
 
 ### Known issues
-- Not built on macOS yet: AU and the Xcode generator are untested (see open question below). Linux builds the Standalone and VST3.
-- pluginval not run yet (first scheduled at the end of Phase 3, on macOS).
+- The Xcode generator is untested (CI uses Ninja). Builds are ad-hoc signed, not notarized.
 - Plugin state stores sample file paths, not audio. Self-contained sessions arrive in Phase 9.
 - MIDI input is ignored until Phase 6. The test editor is a placeholder until Phase 2.
 - The MARK, fine-adjust and CANCEL x4 logic is tested but not reachable from the UI yet; the PanelModel state machine (Phase 2) wires them to buttons.
 - New working decisions U23 to U27 in SPEC section 14 (SUB PAD retrigger, new-sample defaults, LEVEL curve, fades, BPM resolution).
 
-### Open question for the owner
-- How should AU be built and validated: on your Mac (I give you the commands), or a GitHub Actions macOS runner that builds AU/VST3/Standalone and runs pluginval on every push?
+### Release
+- CI (`.github/workflows/build.yml`) builds on macOS (universal AU/VST3/Standalone, ad-hoc signed) and Linux on every push, runs the unit tests, `auval -strict` and pluginval at strictness 10 on AU and VST3. All pass.
+- Released v0.1.0 as a pre-release: https://github.com/estrangedlovers/SPSX/releases/tag/v0.1.0
+- Tag pushes are refused by the cloud session's git proxy, so releases from a cloud session use a manual workflow run with `release_tag` (GitHub creates the tag). From your own machine, pushing a `v*` tag works too.
 
 ### Next
 Phase 2: hardware UI (PanelModel state machine, vector panel, 7-segment display, keyboard map).
