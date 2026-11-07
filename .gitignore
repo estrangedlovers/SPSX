@@ -1,0 +1,10 @@
+# Manual: large and copyrighted; fetch with tools/fetch_manual.sh
+docs/SP-404SX_Owners_Manual.pdf
+
+# Build output
+build*/
+cmake-build-*/
+*.xcodeproj/
+.idea/
+.DS_Store
+__pycache__/
