@@ -1,32 +1,39 @@
 # CLAUDE.md
 
-Recreation of a 2009 12-pad phrase sampler (7-segment display model) as a JUCE app: Standalone + AU + VST3 from one codebase, with an Authentic mode (hardware limits) and an Extended mode (song-finishing features).
+SPSX: a recreation of a 2009 12-pad phrase sampler (7-segment display model) as a JUCE app. Standalone + AU + VST3 from one codebase, with an Authentic mode (hardware limits) and an Extended mode (song-finishing features).
 
 ## Start here
-1. `docs/PROGRESS.md`: current phase, open decisions, next step.
-2. `docs/SPEC.md`: hardware behaviour (manual is the source of truth for Authentic mode). Section 0 lists prompt-vs-manual conflicts; section 14 lists undocumented behaviours and working decisions.
-3. `docs/ARCHITECTURE.md`: modules, threading, state, Authentic/Extended via `Limits`.
-4. `docs/PLAN.md`: phase tasks. `docs/FIDELITY.md`: per-DSP-block confidence.
+1. `docs/PROGRESS.md`: current phase, open questions, next step.
+2. `docs/SPEC.md`: hardware behaviour (the manual is the source of truth for Authentic mode). Section 0: prompt-vs-manual conflicts. Section 14: undocumented behaviours and working decisions (U1..U27).
+3. `docs/ARCHITECTURE.md`: modules, threading, timing model, state, Authentic/Extended via `Limits`.
+4. `docs/PLAN.md`: phase tasks. `docs/FIDELITY.md`: per-DSP-block confidence and parameters.
 
-Manual: `docs/SP-404SX_Owners_Manual.pdf` (git-ignored, fetch with `tools/fetch_manual.sh`). English is PDF pages 3 to 54; printed page = PDF page - 2.
+Manual: `docs/SP-404SX_Owners_Manual.pdf` (70 MB, plain git; LFS uploads are refused by the cloud session proxy). English is PDF pages 3 to 54; printed page = PDF page - 2.
 
-## Process rules (from the owner)
-- Work phase by phase. At the end of each phase: clean build, tests pass, update `docs/PROGRESS.md`, commit, **stop and wait for review**.
-- Unknown hardware behaviour goes into `docs/FIDELITY.md` / SPEC section 14, never guessed silently.
-- No vendor logos, wordmarks or the product name in UI, bundle ID or assets. Function labels are fine.
-- Real-time safety: no allocation, locks, file I/O or logging on the audio thread. Lock-free FIFOs only.
-- Limits are parameters (`Limits` struct), not separate code paths.
-- Licenses: check before adding any dependency; prefer permissive. Time-stretch: signalsmith-stretch (MIT). Ableton Link / Rubber Band need owner approval.
-- Writing style for docs: no em dashes.
-
-## Build (Phase 1 onward; not yet created)
+## Build and test
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --build build -j
+ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "[tag]"
 ```
-Xcode: `cmake -S . -B build-xcode -G Xcode`. Universal: add `-DUNIVERSAL=ON`.
+- Xcode: `cmake -S . -B build-xcode -G Xcode`. Universal macOS binary: add `-DSPSX_UNIVERSAL=ON`.
+- Linux needs: libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libjack-jackd2-dev.
+- Artefacts: `build/SPSX_artefacts/<Config>/{Standalone,VST3,AU}`.
+- Headless render: `build/tools/render_cli/render_cli --pad A1=kick.wav --script hits.txt --out out.wav --rate 48000` (script format at the top of `tools/render_cli/main.cpp`).
 
-## Tools
-- `tools/slicer_patterns.py`: Slicer+FLG P01..P16 from the manual; run to verify and print gate strings.
-- `tools/fetch_manual.sh`: download the manual into `docs/`.
+## Layout
+- `src/core/`: everything testable without a GUI. `engine/` (Engine, EngineHost, Voice, VoicePool), `dsp/` (SincResampler, LoFi, GranularStretcher), `sampler/` (SampleEdit, TimeModify, StretchRenderer), `state/` (SampleData, PadSettings, Project), `io/` (AudioFileIO), `SamplerController` (message-thread facade), `Limits.h`, `Tempo.h`, `CancelDetector.h`, `RealtimeGuard.h`.
+- `src/plugin/`: AudioProcessor + editor (Phase 1 editor is a temporary test UI).
+- `tests/`: Catch2; `AllocGuard.cpp` replaces operator new in the test binary to catch audio-thread allocations.
+- `tools/`: `render_cli`, `slicer_patterns.py`, `fetch_manual.sh`.
+
+## Conventions
+- Process: work phase by phase. End of phase: clean build, tests pass, update `docs/PROGRESS.md`, commit, **stop and wait for review**.
+- Unknown hardware behaviour: add a U-entry to SPEC section 14 and a FIDELITY row; never guess silently.
+- Real-time: nothing on the audio thread allocates, locks, does file I/O or logs. Engine state changes travel as `Command`s (UI FIFO, or `schedule()` with an absolute engine time from the audio thread). Samples are immutable `SampleData`; only `SamplerController` creates them.
+- Authentic vs Extended differences live in `Limits`, never as mode checks in DSP.
+- Tests compare floats exactly where a path is meant to be bit-exact; `-Wfloat-equal` is off for tests only. In `src/` use `juce::exactlyEqual` for intentional exact compares.
+- JUCE style: 4-space indent, space before call parentheses, `juce::` qualified, braces on new lines.
+- No vendor logos, wordmarks or the hardware's product name in UI, bundle ID or assets.
+- Docs: no em dashes.
+- Dependencies: check licenses first; Rubber Band and Ableton Link need owner approval.

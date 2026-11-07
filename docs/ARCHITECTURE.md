@@ -2,13 +2,15 @@
 
 ## 1. Targets and build
 
-- One CMake project, JUCE pinned to a release tag via `FetchContent` (submodule is an alternative; FetchContent keeps the repo small). C++20.
-- One shared static library `core` holds everything except the plugin/app shells. Targets: `Standalone`, `AU`, `VST3` from `juce_add_plugin`, plus `core_tests` (Catch2) and `render_cli` (headless renderer).
+- One CMake project, dependencies pinned in `cmake/Dependencies.cmake` via `FetchContent` (JUCE 8.0.17-security, signalsmith-stretch 1.4.0, Catch2 3.8.1). C++20.
+- `juce_add_plugin(SPSX ...)` creates the static shared-code target `SPSX` (all of `src/`) and the format targets `SPSX_Standalone`, `SPSX_VST3`, `SPSX_AU` (Apple only). `SPSXTests` (Catch2) and `render_cli` link `SPSX` through `spsx_use_shared_code()`, which borrows its include paths and module definitions so JUCE modules compile once.
 - `CMAKE_OSX_ARCHITECTURES=arm64` by default; `-DUNIVERSAL=ON` adds `x86_64`.
 - Generators: Ninja (CLion) and Xcode both supported; no generator-specific logic.
 - Third-party: JUCE (AGPLv3 / commercial; you choose), Catch2 (BSL-1.0), signalsmith-stretch (MIT), nlohmann/json (MIT) **or** juce::JSON. Each added dependency gets a line in `THIRD_PARTY.md` with its license.
 
 ## 2. Module breakdown
+
+Phase 1 implemented: `core/` (Types, Limits, Tempo, CancelDetector, RealtimeGuard, SamplerController, state/, engine/, dsp/, io/, sampler/) and a test editor in `plugin/`. The tree below is the target layout; names in it that do not exist yet arrive in later phases.
 
 ```
 src/
@@ -102,7 +104,7 @@ There are no `if (authentic)` branches in DSP; behaviour follows values. The UI 
 
 Rules:
 
-- No allocation, locks, file I/O or logging on the audio thread. Enforced in debug builds by an allocation guard (operator new hook armed during `processBlock`) that asserts.
+- No allocation, locks, file I/O or logging on the audio thread. `Engine::process` opens an `rt::ScopedRealtime` section; the test binary replaces global operator new (`tests/AllocGuard.cpp`) and counts allocations inside such sections, and tests require zero. Plugins do not replace operator new, since that would leak into the host process.
 - Sample data is immutable once published. Replacing a sample: build new `SampleData` on a worker, then hand a `shared_ptr`-like intrusive handle to the audio thread through the FIFO; the old one is returned through a "garbage" FIFO and freed on the message thread. No ref-count release on the audio thread that could free.
 - Parameter changes from UI: atomics for continuous values (knobs), FIFO messages for discrete events (pad hits, mode changes). Effects smooth continuous params internally.
 
@@ -114,12 +116,17 @@ The engine runs at 44.1 kHz internally (Authentic default). `RateConverter` wrap
 host/device buffer (fs_dev) -> input SRC -> engine @44.1k (fixed internal block = 32 samples) -> output SRC -> host
 ```
 
-- Polyphase windowed-sinc, ~ 64 taps, passband to 20 kHz at 44.1k. Latency is constant and reported via `setLatencySamples`.
+- Polyphase Kaiser-windowed sinc (`dsp/SincResampler.h`), 128 taps, passband to about 20 kHz at 44.1k.
+- `EngineHost` renders the engine in 32-sample chunks on demand. Every event is scheduled at an absolute engine time `(deviceTime + offset) * 44100/fs + S`, with S = output look-ahead + one chunk, so all events have the same latency (107 samples at 48 kHz). That latency is reported via `setLatencySamples`. The input path has a zero pre-roll so the engine never reads input that has not arrived.
 - When `fs_dev == 44100` the converter is bypassed (zero added latency).
 - Extended "native rate" setting bypasses the converter and runs DSP at `fs_dev`; lo-fi/bitcrush then alias differently, which is the documented trade-off.
 - Fixed internal block size makes effect behaviour independent of host buffer size and simplifies sample-accurate sequencing.
 
 ## 6. State model
+
+`SamplerController` (message thread) is the single entry point for document edits: it updates `Project` and posts the matching engine commands, runs file loads and Time Modify renders on a 2-thread pool, and applies their results in `tick()`.
+
+Sample lifetime: the engine holds one reference per published `SampleData`. When a pad's sample is replaced, the old pointer is parked in a retired list until no voice reads it, then returned through a FIFO and released on the message thread (`Engine::collectGarbage`). The audio thread never drops the last reference.
 
 Two layers:
 

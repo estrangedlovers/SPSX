@@ -15,11 +15,11 @@ Undocumented control-behaviour questions are listed as U1..U22 in `SPEC.md` sect
 | Block | Documented | Assumed | Confidence |
 |---|---|---|---|
 | Sample format | 16-bit linear, 44.1 kHz (p. 49) | Requantize to 16-bit on record/import, no dither (prompt instruction) | High |
-| Mixer headroom | Output gain -3..+12 dB is an "internal processing level"; many pads can distort (p. 39) | Fixed-point style hard clip at 0 dBFS after output gain, before VOLUME | Medium |
-| VOLUME | Analog volume (p. 9) | Audio taper, post-clip | Medium |
+| Mixer headroom | Output gain -3..+12 dB is an "internal processing level"; many pads can distort (p. 39) | Hard clip at 0 dBFS after output gain, before VOLUME (Authentic). Extended: no clip. | Medium |
+| VOLUME | Analog volume (p. 9) | Gain = knob^3 (audio-taper approximation), post-clip | Medium |
 | Input path | Input gain -10/0 dB before PEAK LED; CTRL 3 digital level after ADC (p. 19) | PEAK threshold -6 dBFS analog-equivalent; red illumination at digital clip | Medium |
 | Mic level | Cannot reach zero (p. 45) | Gain 0 dB..+40 dB, minimum not silent | Low |
-| Engine rate | 44.1 kHz | Resample to/from device rate with a high-quality polyphase (sinc) resampler | High (technique) |
+| Engine rate | 44.1 kHz | Polyphase Kaiser-windowed sinc (128 taps, beta 9, cutoff 0.95 x lower Nyquist, 512 phases). Tested: 10 kHz tone error < -60 dB re 0.5, 23 kHz tone into 44.1k rejected by > 70 dB. Event latency at 48 kHz: 107 samples. | High (technique) |
 | Polyphony | 12 mono / 6 stereo; 4 / 2 while resampling (p. 11, 26) | Stereo counts 2 | High |
 | Voice stealing | Not documented | Oldest first; pad retrigger reuses own voice | Low |
 
@@ -27,12 +27,12 @@ Undocumented control-behaviour questions are listed as U1..U22 in `SPEC.md` sect
 
 | Block | Documented | Assumed | Confidence |
 |---|---|---|---|
-| Gate/trigger/loop/one-shot/reverse | p. 12 | Click-free 1 ms fades at stop/loop points **[the hardware may click; verify]** | Medium |
+| Gate/trigger/loop/one-shot/reverse | p. 12 | 2 ms fade on stop/steal only; no fade-in and no loop crossfade (SPEC U26) | Medium |
 | LEVEL 0..127 | p. 27 | Linear gain mapping `level/127` **[could be dB-scaled]** | Low |
-| LO-FI | "Switches the sample's playback quality (standard/lo-fi)" (p. 12) | Downsample to ~11 kHz with zero-order hold (keep aliasing), 8-bit-ish quantization, gentle LPF on output. Parameters to be tuned. | Low |
+| LO-FI | "Switches the sample's playback quality (standard/lo-fi)" (p. 12) | Implemented (`dsp/LoFi.h`): zero-order hold at 1/4 rate (11.025 kHz) with no anti-alias filter, 10-bit mid-tread quantizer without dither, one-pole low-pass at 9 kHz. All three values are in `LoFi::Params` for Phase 10 tuning. | Low |
 | Start/end | ±130 ms per operation, min 100 ms region (p. 29) | Sample-accurate points | High |
 | BPM derivation | From region length, may be x2/x0.5 (p. 30) | Assume 4/4, choose beat count (1, 2, 4, 8, 16...) whose BPM lands in 80..160 | Medium |
-| Time Modify | Pitch-preserving, 0.5x..~1.3x, "may sound quavery or noisy" (p. 30) | Authentic: granular OLA with ~40 ms grains to keep audible graininess. Extended: signalsmith-stretch. | Low (Authentic voice), High (Extended quality) |
+| Time Modify | Pitch-preserving, 0.5x..~1.3x, "may sound quavery or noisy" (p. 30) | Authentic: real-time granular OLA per voice (`dsp/GranularStretcher.h`), 40 ms periodic-Hann grains, 50% overlap, flat first half-grain to keep the attack. Extended: signalsmith-stretch `exact()` render on a worker thread, granular fallback until the render arrives. Tested: length within 2 grains, pitch within 3%. | Low (Authentic voice), High (Extended quality) |
 
 ## Direct effects
 

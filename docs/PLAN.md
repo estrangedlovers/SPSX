@@ -6,22 +6,21 @@ Each phase ends with: clean build, tests green, `docs/PROGRESS.md` updated, comm
 - [x] Obtain manual, read English section in full
 - [x] SPEC.md, ARCHITECTURE.md, PLAN.md, FIDELITY.md
 - [x] Transcribe Slicer patterns (tools/slicer_patterns.py)
-- [ ] Review with owner; resolve open decisions listed in PROGRESS.md
+- [x] Review with owner (name SPSX, JUCE personal use, manual committed)
 
-## Phase 1: Engine core
-1. CMake skeleton: JUCE via FetchContent (pinned tag), `core` lib, Standalone/AU/VST3 shells that build and pass audio, Catch2, `render_cli`. CLAUDE.md build commands verified.
-2. `state` types + JSON round-trip tests.
-3. AudioFileIO: WAV/AIFF read/write, 16-bit requantize without dither (Authentic), float (Extended). Tests.
-4. RateConverter (44.1k internal) with latency reporting; bypass at 44.1k. Tests: passband ripple, alias rejection, latency constant.
-5. VoicePool with channel-voice budget (12 / 6 stereo; 4 / 2 while resampling) and stealing policy. Tests.
-6. Voice: gate/trigger, loop/one-shot, reverse, start/end, LEVEL, fades. Tests per combination.
-7. PadRouter: HOLD, SUB PAD, banks, current pad, CANCEL x4, PAUSE.
-8. MARK flows, fine adjust (±130 ms, 100 ms minimum), truncate (destructive), BPM derivation, halve/double.
-9. Time Modify: Authentic granular stretch, Extended signalsmith-stretch (background render; license check first). Disabled with REVERSE.
-10. LO-FI playback path (initial voicing).
-11. Mixer: output gain, clip, VOLUME.
-12. Debug allocation guard on the audio thread.
-13. Headless harness: script pad events, render offline, compare.
+## Phase 1: Engine core (done)
+- [x] CMake skeleton, pinned deps, Standalone/VST3 (+AU on Apple), Catch2, `render_cli`
+- [x] `state`: SampleData, PadSettings, Project + JSON round trip
+- [x] AudioFileIO: WAV/AIFF, rate conversion on import, 16-bit requantize without dither, bit-exact integer writer
+- [x] SincResampler + EngineHost (44.1k internal, constant reported latency, native-rate bypass)
+- [x] VoicePool: 12 channel-voices (stereo = 2), 4 while resampling, oldest-first stealing with 2 ms fade
+- [x] Voice: gate/trigger, loop/one-shot, reverse, region, LEVEL, LO-FI, Time Modify (granular / pre-rendered)
+- [x] Engine routing: HOLD, SUB PAD, banks, stop all, PAUSE, sample-accurate timed commands, safe sample replacement
+- [x] Sample editing: MARK flows, fine adjust, truncate, BPM derivation, halve/double, Time Modify knob mapping, tempo table
+- [x] CancelDetector (CANCEL x4)
+- [x] Output gain, clip, VOLUME
+- [x] Allocation guard in tests (zero allocations in Engine/EngineHost process)
+- [x] Phase 1 test editor (pad grid, drag-drop load, mode toggles)
 
 ## Phase 2: Hardware UI
 1. PanelModel state machine for all SPEC flows that exist so far (others stubbed with display codes).

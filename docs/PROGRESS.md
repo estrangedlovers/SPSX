@@ -1,30 +1,39 @@
 # PROGRESS
 
-## Phase 0: Spec (status: done, awaiting review)
+## Phase 1: Engine core (status: done, awaiting review)
 
 ### Done
-- Fetched the owner's manual from Roland's support page and read the English section (manual pp. 2 to 52) in full, including figures: panel diagram, effect tables with Effect Limit stars, Slicer pattern notation.
-- `docs/SPEC.md`: controls, connectors, every FUNC / CANCEL / REMAIN combination, power-on combos, all 29 effects with CTRL 1/2/3 and display codes, Effect Limit (17 effects verified), sequencer, sampling, resample, EXT SOURCE, display codes, error messages, full MIDI Implementation Chart, note map, a list of 10 prompt-vs-manual conflicts and 22 undocumented behaviours with working decisions.
-- `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/FIDELITY.md`.
-- `tools/slicer_patterns.py`: P01..P16 transcribed from notation and verified to sum to one bar each.
-- `CLAUDE.md` for session hand-off.
+- Build: CMake + Ninja, JUCE 8.0.17-security, signalsmith-stretch 1.4.0, Catch2 3.8.1, all pinned (`cmake/Dependencies.cmake`). Targets: `SPSX_Standalone`, `SPSX_VST3`, `SPSX_AU` (Apple only), `SPSXTests`, `render_cli`.
+- Engine (`src/core/engine`): voice pool with channel-voice budget and documented stealing; gate/trigger, loop/one-shot, reverse, start/end, LEVEL, LO-FI, HOLD, SUB PAD, stop all, PAUSE; sample-accurate timed commands; lock-free UI to audio FIFO; retired-sample handoff so the audio thread never frees memory.
+- EngineHost: runs the engine at 44.1 kHz behind a 128-tap sinc converter with constant, reported latency (107 samples at 48 kHz); bypassed at 44.1 kHz; Extended native-rate mode.
+- Sample editing (`src/core/sampler`): MARK flows (start+end, end-only, start-only, BPM snap), START/END fine adjust (±130 ms, 100 ms minimum, centre cancels), destructive truncate, BPM derivation and halve/double, Time Modify (Authentic real-time granular, Extended signalsmith render on a worker), tempo table (127 values).
+- I/O: WAV/AIFF load with conversion to 44.1 kHz and 16-bit requantize (no dither); bit-exact 16/24-bit writer.
+- `SamplerController`: message-thread facade (load sync/async, copy, exchange, delete, truncate, protect checks, settings edits, Extended stretch jobs).
+- Plugin/standalone shell with a temporary test editor (pad grid, drop files onto pads, GATE/LOOP/REVERSE/LO-FI, HOLD, SUB PAD, stop all, VOLUME).
+- `render_cli`: headless scripted renderer through the same EngineHost path as the plugin.
+- Tests: 56 test cases, all passing in Debug and Release on Linux, including a zero-allocation check on the audio path.
 
-### Findings that change the prompt's assumptions
-1. Polyphony is 12 **mono** voices; a stereo sample uses 2 (so 6 stereo). Resample: 4 mono / 2 stereo.
-2. Pattern length is 1..20 in 1-bar steps, then 4-bar steps up to 99.
-3. Slicer patterns P01..P16 are defined in the manual; no design needed.
-4. Effect Grab uses TAP TEMPO as the modifier.
-5. MFX can be picked with MFX + pad (1..12) and MFX + DJFX LOOPER + pad (13..24).
-6. FLANGER and PHASER have a hidden balance control (MFX + CTRL 1).
-7. MIDI Note Off is not recognized by the hardware; velocity is marked "recognized" but its effect is undocumented.
-8. Garbled parameters in your sources, now verified: NOISE GEN = white / disc / hum; C.CANCELER = L-R balance / low boost / high boost; SUBSONIC = pitch / threshold / balance; BPM LOOPER = length★ / timing (oFF, 1..8) / loop sw.
+### Bug found and fixed along the way
+JUCE's float-to-16-bit WAV writer scales by 2^31-1 and truncates, losing one LSB on positive samples. `io::writeFile` now writes integer PCM itself so 16-bit samples round-trip bit for bit.
 
-### Known issues / open decisions (need owner input)
-- **App name**: `[APP NAME]` was not filled in. Needed before Phase 1 for bundle ID, product name and plugin codes.
-- **JUCE license**: JUCE 8 is AGPLv3 or commercial. Confirm which you hold before the first build commit.
-- **Manual in repo**: the PDF (70 MB, 372 pages, Roland copyright) is downloaded to `docs/` but git-ignored. `tools/fetch_manual.sh` re-downloads it. Say if you want it committed anyway (Git LFS recommended).
-- **macOS builds**: this cloud session runs on Linux. Phase 1+ can build and test `core` + VST3/Standalone on Linux here, but AU, Xcode, universal binaries and pluginval on AU need a Mac (your machine or a macOS CI runner).
-- **Working decisions** for U1..U22 in SPEC section 14: please skim and veto any you disagree with.
+### Known issues
+- Not built on macOS yet: AU and the Xcode generator are untested (see open question below). Linux builds the Standalone and VST3.
+- pluginval not run yet (first scheduled at the end of Phase 3, on macOS).
+- Plugin state stores sample file paths, not audio. Self-contained sessions arrive in Phase 9.
+- MIDI input is ignored until Phase 6. The test editor is a placeholder until Phase 2.
+- The MARK, fine-adjust and CANCEL x4 logic is tested but not reachable from the UI yet; the PanelModel state machine (Phase 2) wires them to buttons.
+- New working decisions U23 to U27 in SPEC section 14 (SUB PAD retrigger, new-sample defaults, LEVEL curve, fades, BPM resolution).
+
+### Open question for the owner
+- How should AU be built and validated: on your Mac (I give you the commands), or a GitHub Actions macOS runner that builds AU/VST3/Standalone and runs pluginval on every push?
 
 ### Next
-Phase 1: engine core (see PLAN.md).
+Phase 2: hardware UI (PanelModel state machine, vector panel, 7-segment display, keyboard map).
+
+---
+
+## Phase 0: Spec (status: done, reviewed)
+
+- Owner's manual read in full; SPEC, ARCHITECTURE, PLAN, FIDELITY written; Slicer P01..P16 transcribed.
+- Owner decisions: app name SPSX; JUCE under personal-use terms; manual committed to the repo.
+- Findings vs the original prompt are listed in SPEC section 0 (polyphony is 12 mono / 6 stereo, pattern length steps, Effect Grab uses TAP TEMPO, MFX + pad selection, hidden Flanger/Phaser balance, Note Off not recognized, Slicer patterns defined in the manual).

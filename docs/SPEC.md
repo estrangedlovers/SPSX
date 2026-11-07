@@ -707,3 +707,8 @@ Implications: no MIDI out of any kind; no CC; Note Off is not recognized (U6); A
 | U20 | Behaviour of CTRL knobs when switching effects (pickup vs jump) | Knobs are absolute; switching effect reads current knob positions unless REMAIN presets exist **[assumed]** |
 | U21 | Does the effect process the whole mix or only targeted pads? | Only targeted pads go through the effect; others are dry (p. 13 "applied only to the pad you pressed most recently") |
 | U22 | Is the metronome audible during sampling count-in only, or throughout? | Count-in only **[assumed]** |
+| U23 | SUB PAD on a trigger-mode pad that is still playing: toggle off or retrigger? | Retrigger from the start (the manual pitches SUB PAD for rapid repeats); in GATE mode SUB PAD release stops it **[assumed]** |
+| U24 | Default GATE/LOOP/REVERSE/LO-FI for a new sample | All off; LEVEL 127 (documented); region = whole sample **[assumed]** |
+| U25 | LEVEL curve | Linear gain level/127 **[assumed]** |
+| U26 | Fades at stop, steal and loop points | 2 ms linear fade on stop/steal; no fade-in, no loop crossfade (keeps the hardware's possible clicks) **[assumed]** |
+| U27 | BPM display resolution for samples | 0.1 BPM internally; display format decided in Phase 2 **[assumed]** |
