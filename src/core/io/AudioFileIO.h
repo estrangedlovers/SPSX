@@ -13,6 +13,11 @@ namespace spsx::io
         Wave Converter also converted on import). Keeps at most 2 channels. */
     juce::AudioBuffer<float> toEngineRate (const juce::AudioBuffer<float>& in, double inRate);
 
+    /** Loudest sample value accepted from a file (+18 dBFS). */
+    constexpr float kMaxImportLevel = 8.0f;
+    /** NaN / Inf to 0, everything else clamped to +-kMaxImportLevel. */
+    void sanitise (juce::AudioBuffer<float>& buffer) noexcept;
+
     SampleData::Ptr makeSample (const juce::AudioBuffer<float>& audio, double rate, bool quantize16);
 
     /** Hardware limit per sample: about 2 GB (manual p. 20) -> "FUL". */

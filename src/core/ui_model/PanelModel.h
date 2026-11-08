@@ -182,6 +182,28 @@ namespace spsx
         void applyFuncSetting();
         void turnInEdit (Knob k, double v, double now);
         void pressExt (double now);
+    public:
+        /** Sends Pad Base Ch, MIDI SYNC and the mode's MIDI limits to the engine. */
+        void sendMidiSettings();
+
+        // ---- Extended MIDI learn ----------------------------------------------------
+        struct LearnTarget
+        {
+            bool knob = true;
+            int  id = 0;   // Knob or Control
+            friend bool operator== (const LearnTarget&, const LearnTarget&) = default;
+        };
+        /** Next Control Change binds to `target`; nullopt cancels. */
+        void armMidiLearn (std::optional<LearnTarget> target) { learnTarget = target; }
+        std::optional<LearnTarget> midiLearnTarget() const noexcept { return learnTarget; }
+        /** A Control Change from MIDI IN (message thread): binds while learning,
+            otherwise turns the bound knob or presses / releases the bound button. */
+        void handleMidiControl (int channel, int cc, int value, double now);
+        void clearMidiMap();
+        void setVelocityCurve (int curve);
+    private:
+        std::optional<LearnTarget> learnTarget;
+        std::array<bool, kNumControls> ccHeld {};
         void releaseExt();
         void pressResample (double now);
         void exitSampling (bool cancelRecording);

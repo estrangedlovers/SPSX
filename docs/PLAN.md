@@ -58,10 +58,12 @@ Each phase ends with: clean build, tests green, `docs/PROGRESS.md` updated, comm
 - [x] Plugin: host tempo and transport (HOLD + pad arms for host start)
 - [x] Tests: quantize grids, shuffle, count-in, sample accuracy, looping, reserve/immediate switch, overdub, no double triggers, note lengths, rehearsal, erase, length rules, metronome, host sync, JSON, panel flows, real-time safety
 
-## Phase 6: MIDI
-1. Authentic: note map (46..106, Base Ch / Base Ch+1), channel setting, sync modes AUt/tNp/oFF, Song Position, All Sound Off, Active Sensing, HOLD+pad wait-for-start.
-2. Plugin: host MIDI + host tempo.
-3. Extended: MIDI learn (all controls), profiles, velocity curves, Note Off, MIDI out for pads and patterns, clock out, SMF export, optional Ableton Link (license check: Link is GPLv2 or commercial; needs approval).
+## Phase 6: MIDI (done)
+- [x] Authentic: note map (46..106, Base Ch / Base Ch+1), channel setting, sync modes AUt/tNp/oFF, Song Position, All Sound Off, Active Sensing, HOLD+pad wait-for-start
+- [x] Plugin: host MIDI + host tempo (host transport follows MIDI SYNC too)
+- [x] Extended: MIDI learn (knobs and buttons), velocity curves, Note Off, SMF export of patterns
+- [x] Output safety: final brickwall and NaN guard, effect runaway reset, input and import sanitising, fuzz test
+- Deferred to Phase 9 (settings window): MIDI learn profiles, MIDI out for pads and patterns, clock out. Ableton Link still needs owner approval (GPLv2 or commercial license).
 
 ## Phase 7: Extended song features
 Song mode; second effect slot; per-pad pitch/pan/fades; non-destructive editing + undo/redo; offline mixdown (16/24-bit, 44.1/48 kHz, tails); stems (per pad, per bank, effect return); projects with autosave and crash recovery; optional SD layout export (samples only unless pattern format is found).

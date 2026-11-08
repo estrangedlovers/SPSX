@@ -34,6 +34,11 @@ namespace spsx::ui
         void mouseDoubleClick (const juce::MouseEvent&) override;
         void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
+        /** MIDI learn mode: clicks choose the learn target instead of pressing. */
+        void setLearnMode (bool on) { learnMode = on; }
+        bool isLearnMode() const noexcept { return learnMode; }
+        std::function<void()> onLearnTargetChanged;
+
         /** Logical panel units to component pixels. */
         juce::AffineTransform toScreen() const noexcept { return transform; }
 
@@ -66,6 +71,7 @@ namespace spsx::ui
         std::map<Control, juce::String> keyLabels;
         std::map<Knob, juce::String> knobKeyLabels;
         bool showKeys = false;
+        bool learnMode = false;
         std::optional<Knob> selectedKnob;
 
         // mouse

@@ -32,6 +32,9 @@ namespace spsx::fx
         void setLimit (bool on) noexcept { limit = on; }
 
         void process (float* left, float* right, int numSamples, double tempo) noexcept;
+        /** Clears every effect's state (delay lines, filters). Audio thread; used when the
+            effect bus runs away or turns non-finite. */
+        void resetAll() noexcept;
 
     private:
         struct SlotState

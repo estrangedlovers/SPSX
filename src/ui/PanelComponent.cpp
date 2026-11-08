@@ -562,6 +562,18 @@ namespace spsx::ui
         const auto& L = PanelLayout::get();
         const double now = nowSeconds();
 
+        // MIDI learn: a click picks the knob or button to bind instead of operating it.
+        if (learnMode)
+        {
+            if (auto* k = L.knobAt (p))
+                model.armMidiLearn (PanelModel::LearnTarget { true, (int) k->knob });
+            else if (auto* c = L.controlAt (p))
+                model.armMidiLearn (PanelModel::LearnTarget { false, (int) c->control });
+            if (onLearnTargetChanged)
+                onLearnTargetChanged();
+            return;
+        }
+
         if (auto* k = L.knobAt (p))
         {
             dragKnob = k->knob;

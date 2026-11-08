@@ -121,6 +121,14 @@ namespace spsx::fx
             s.previous = -1;
     }
 
+    void EffectHost::resetAll() noexcept
+    {
+        for (auto& slot : effects)
+            for (auto& e : slot)
+                if (e != nullptr)
+                    e->reset();
+    }
+
     void EffectHost::process (float* l, float* r, int n, double tempo) noexcept
     {
         for (int done = 0; done < n; done += kChunk)

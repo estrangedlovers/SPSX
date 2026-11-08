@@ -141,6 +141,7 @@ namespace spsx
         sendEngine (Command::Type::setExtLevel, kNoPad, extLevel);
         sendEngine (Command::Type::setExtStereo, kNoPad, stereo ? 1.0 : 0.0);
         sendEngine (Command::Type::setExtOn, kNoPad, extOn ? 1.0 : 0.0);
+        sendMidiSettings();
         sentEffect = -2;
         sentTargets.reset();
         sentTargetAll = sentTargetExt = false;
@@ -149,6 +150,73 @@ namespace spsx
         syncTargets();
         for (int e = 0; e < fx::kNumEffects; ++e)
             sendEffectParams (e);
+    }
+
+    void PanelModel::sendMidiSettings()
+    {
+        const auto& dev = controller.project().device;
+        const auto& lim = controller.limits();
+        Command c;
+        c.type = Command::Type::setMidi;
+        c.midi.baseChannel   = juce::jlimit (1, 16, dev.midiChannel);
+        c.midi.sync          = juce::jlimit (0, 2, dev.midiSync);
+        c.midi.honourNoteOff = lim.honourNoteOff;
+        c.midi.velocity      = lim.velocity;
+        c.midi.velocityCurve = juce::jlimit (0, 2, dev.velocityCurve);
+        c.midi.controlChange = lim.midiLearn;
+        c.midi.minBpm        = lim.syncTempoMin;
+        c.midi.maxBpm        = lim.syncTempoMax;
+        engine.post (c);
+    }
+
+    void PanelModel::handleMidiControl (int channel, int cc, int value, double now)
+    {
+        auto& map = controller.project().device.midiMap;
+        if (learnTarget.has_value())
+        {
+            // One controller per target and one target per controller.
+            const auto t = *learnTarget;
+            std::erase_if (map, [&] (const MidiBinding& b)
+            {
+                return (b.channel == channel && b.cc == cc) || (b.knob == t.knob && b.id == t.id);
+            });
+            map.push_back ({ channel, cc, t.knob, t.id });
+            learnTarget.reset();
+            flash (DisplayText::make ("Lrn"), now);
+            return;
+        }
+
+        for (const auto& b : map)
+        {
+            if (b.channel != channel || b.cc != cc)
+                continue;
+            if (b.knob)
+            {
+                if (b.id >= 0 && b.id < kNumKnobs)
+                    turn ((Knob) b.id, juce::jlimit (0, 127, value) / 127.0, now);
+            }
+            else if (b.id >= 0 && b.id < kNumControls)
+            {
+                const bool down = value >= 64;
+                auto& held = ccHeld[(size_t) b.id];
+                if (down && ! held)       press ((Control) b.id, now);
+                else if (! down && held)  release ((Control) b.id, now);
+                held = down;
+            }
+        }
+    }
+
+    void PanelModel::clearMidiMap()
+    {
+        controller.project().device.midiMap.clear();
+        learnTarget.reset();
+        ccHeld = {};
+    }
+
+    void PanelModel::setVelocityCurve (int curve)
+    {
+        controller.project().device.velocityCurve = juce::jlimit (0, 2, curve);
+        sendMidiSettings();
     }
 
     void PanelModel::setFxProcessorMode (bool on)
@@ -1317,8 +1385,8 @@ namespace spsx
                 dev.effectLimit = v == 1;
                 sendEngine (Command::Type::setEffectLimit, kNoPad, dev.effectLimit ? 1.0 : 0.0);
                 break;
-            case FuncSetting::midiChannel:  dev.midiChannel = v + 1; break;
-            case FuncSetting::midiSync:     dev.midiSync = v; break;
+            case FuncSetting::midiChannel:  dev.midiChannel = v + 1; sendMidiSettings(); break;
+            case FuncSetting::midiSync:     dev.midiSync = v; sendMidiSettings(); break;
             case FuncSetting::inputGain:
                 dev.inputGainDb = kInputGain[(size_t) v];
                 sendEngine (Command::Type::setInputGainDb, kNoPad, dev.inputGainDb);

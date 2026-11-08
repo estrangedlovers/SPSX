@@ -247,6 +247,7 @@ namespace spsx
                     c.type = e.kind == Sequencer::Event::Kind::padDown ? Command::Type::padDown : Command::Type::padUp;
                     c.pad = PadId::fromIndex (e.pad);
                     c.index = 1;   // from the sequencer: never recorded back
+                    c.velocity = e.velocity;
                 }
                 schedule (c);
             });
@@ -395,6 +396,20 @@ namespace spsx
         // ---- effects -------------------------------------------------------------------
         effects.process (fl, fr, n, fxTempo);
 
+        // Runaway guard: an effect bus above +30 dBFS or non-finite means a feedback path
+        // has blown up. Silence it and clear every effect's state; voices play on.
+        {
+            bool runaway = false;
+            for (int i = 0; i < n; ++i)
+                runaway = runaway || ! (std::abs (fl[i]) + std::abs (fr[i]) < kEffectRunaway);   // NaN too
+            if (runaway)
+            {
+                std::fill (fl, fl + n, 0.0f);
+                std::fill (fr, fr + n, 0.0f);
+                resetEffects();
+            }
+        }
+
         // ---- recorder ------------------------------------------------------------------
         if (tap != nullptr && recSource == 1)
         {
@@ -542,8 +557,8 @@ namespace spsx
         {
             case T::padDown:
                 if (! c.pad.isValid()) break;
-                padDown (c.pad, false);
-                if (c.index != 1) seq.padDown (c.pad.index(), time);
+                padDown (c.pad, false, c.velocity);
+                if (c.index != 1) seq.padDown (c.pad.index(), time, c.velocity, c.index == 2);
                 break;
             case T::padUp:
                 if (! c.pad.isValid()) break;
@@ -636,6 +651,11 @@ namespace spsx
             case T::setMicMode:       micMode = c.value > 0.5; break;
             case T::setMicGainDb:     micGain = (float) std::pow (10.0, c.value / 20.0); break;
             case T::setExtOn:         extOn = c.value > 0.5; break;
+            case T::setMidi:
+                midi = c.midi;
+                midi.baseChannel = std::clamp (midi.baseChannel, 1, 16);
+                midi.sync = std::clamp (midi.sync, 0, 2);
+                break;
             case T::setExtStereo:     extStereo = c.value > 0.5; break;
             case T::setExtLevel:      extLevel = (float) (std::clamp (c.value, 0.0, 127.0) / 127.0); break;
             case T::setMonitor:       monitor = c.value > 0.5; monitorStereo = c.index != 0; break;
@@ -710,7 +730,7 @@ namespace spsx
         }
     }
 
-    void Engine::padDown (PadId p, bool viaSub) noexcept
+    void Engine::padDown (PadId p, bool viaSub, float velocity) noexcept
     {
         const auto& ps = pads[(size_t) p.index()];
         if (ps.sample == nullptr)
@@ -737,7 +757,7 @@ namespace spsx
             v.release();                           // retrigger: one voice per pad (SPEC U2)
         }
 
-        startVoice (p, viaSub);
+        startVoice (p, viaSub, velocity);
     }
 
     void Engine::padUp (PadId p, bool viaSub) noexcept
@@ -756,14 +776,14 @@ namespace spsx
         }
     }
 
-    void Engine::startVoice (PadId p, bool viaSub) noexcept
+    void Engine::startVoice (PadId p, bool viaSub, float velocity) noexcept
     {
         const auto& ps = pads[(size_t) p.index()];
         const int cost = juce::jlimit (1, 2, ps.sample->numChannels());
         Voice* v = voices.allocate (cost);
         if (v == nullptr)
             return;
-        v->start (p, sourceFor (ps), ps.settings, time);
+        v->start (p, sourceFor (ps), ps.settings, time, velocity);
         v->heldByPad = ! viaSub;
         v->heldBySub = viaSub;
     }

@@ -32,6 +32,11 @@ namespace spsx
         bool undo                  = false;
         bool honourNoteOff         = false;
         bool velocity              = false;
+        /** Control Change for MIDI learn (the hardware recognises no CC but All Sound Off). */
+        bool midiLearn             = false;
+        /** MIDI clock / host tempo range for the sequencer (manual p. 46: 40 to 200). */
+        double syncTempoMin        = 40.0;
+        double syncTempoMax        = 200.0;
 
         static Limits authentic() noexcept { return {}; }
 
@@ -49,6 +54,9 @@ namespace spsx
             l.undo                  = true;
             l.honourNoteOff         = true;
             l.velocity              = true;
+            l.midiLearn             = true;
+            l.syncTempoMin          = 20.0;
+            l.syncTempoMax          = 300.0;
             return l;
         }
     };

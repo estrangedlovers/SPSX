@@ -27,7 +27,8 @@ namespace spsx
 
         void prepare (double engineRate, int maxBlock, const dsp::LoFi::Params& lofiParams);
 
-        void start (PadId padIn, const Source& src, const PadSettings& s, std::int64_t now);
+        /** `velocityGain` scales LEVEL (1 = full; Extended MIDI velocity). */
+        void start (PadId padIn, const Source& src, const PadSettings& s, std::int64_t now, float velocityGain = 1.0f);
         /** Click-free stop: 2 ms linear fade. */
         void release() noexcept;
         /** Immediate stop, used only when every voice object is busy. */
@@ -75,6 +76,7 @@ namespace spsx
         std::int64_t started = 0;
 
         float gain = 1.0f;            // smoothed LEVEL gain
+        float velocity = 1.0f;        // fixed per note
         float send = 0.0f;            // 0 = dry bus, 1 = effect bus (smoothed)
         float sendStep = 0.005f;
         float releaseGain = 1.0f;

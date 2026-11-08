@@ -3,6 +3,8 @@ target_sources(SPSX PRIVATE
     core/engine/EngineHost.cpp
     core/engine/Voice.cpp
     core/engine/Sequencer.cpp
+    core/midi/MidiInput.h
+    core/midi/MidiFileExport.cpp
     core/io/AudioFileIO.cpp
     core/sampler/SampleEdit.cpp
     core/sampler/StretchRenderer.cpp

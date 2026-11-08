@@ -1,30 +1,27 @@
-# SPSX 0.4.0 (preview)
+# SPSX 0.6.0 (preview)
 
-Phases 0 to 4 of the plan are done: spec, engine, hardware panel, all 29 effects, and sampling / EXT SOURCE / resample. The pattern sequencer (Phase 5) and MIDI (Phase 6) are next, so this is still a preview.
+Phases 0 to 6 of the plan are done: engine, hardware panel, all 29 effects, sampling, the pattern sequencer and MIDI. Song features and export (Phase 7), stickers and the settings window come next, so this is still a preview.
 
-## New in 0.4.0
+## New in 0.6.0
 
-**All 29 effects**, with the hardware's controls, display codes and behaviour:
-- Direct buttons: FILTER+DRIVE, VOICE TRANS, DELAY, ISOLATOR, DJFX LOOPER.
-- MFX 1 to 24: REVERB, TAPE ECHO, CHORUS, FLANGER, PHASER, TREMOLO/PAN, DISTORTION, OVERDRIVE, FUZZ, WAH, OCTAVE, COMP, EQUALIZER, BIT CRASH, NOISE GEN, VINYL SIM, RADIO TUNING, SLICER+FLG (the manual's 16 patterns), RING MOD, CHROMATIC PS, PITCH, C.CANCELER, SUBSONIC, BPM LOOPER.
-- Pick an MFX with MFX + CTRL 3, MFX + pad (1 to 12) or MFX + DJFX LOOPER + pad (13 to 24). FLANGER and PHASER have the hidden balance on MFX + CTRL 1.
-- The effect applies to the last pad you played, to the pads you pick with REMAIN + pads, or to everything with REMAIN + effect button. EFFECT GRAB (hold TAP TEMPO + effect button), REMAIN + knobs presets and the last-effect reminder work as on the hardware.
-- Delay times, Slicer rates and BPM Looper lengths follow the tempo of the longest targeted sample (or the pattern tempo).
-- Effect Limit (FUNC + pad 8) tames the 17 starred effects and adds a safety limiter.
-- Switching effects cross-fades, so it never clicks. Drive effects are 4x oversampled; BIT CRASH and LO-FI keep their aliasing on purpose.
+**Pattern sequencer**: PATTERN SELECT, then a pad plays its pattern; another pad reserves the next one (SUB PAD switches at once). Record with REC: metronome in standby, one bar count-in, loop overdub, quantize (QUANTIZE, 10 grids with shuffle), rehearsal (rEH), erase (DEL, then hold pads or HOLD for all), LENGTH, per-pattern tempo with TIME/BPM, delete / copy / exchange patterns. Patterns are saved with the session.
 
-**Sampling**: REC, choose an empty pad, adjust the level (PEAK, CTRL 3, red display ring when clipping), REC to start and stop. Effects can be printed while sampling. Auto sampling (FUNC + pad 4, display `rdY`), one-bar count-in (START/END/LEVEL lit), end point snapped to the beat when you set a tempo. Recordings are 16-bit 44.1 kHz in Authentic mode (WAV or AIFF), written to `~/Music/SPSX/Recordings`.
+**MIDI**:
+- Play pads from a keyboard or DAW on the hardware's note map: note 46 is EXT SOURCE, 47 to 106 are banks A to E on the Pad Base Ch (FUNC + pad 9) and F to J on the next channel.
+- Authentic mode behaves like the hardware: velocity and Note Off are ignored, so a note is a hit and GATE samples play out.
+- MIDI SYNC (FUNC + pad 10): `AUt` follows MIDI clock and Start / Stop / Song Position (HOLD + a pattern pad waits for Start), `tNp` follows tempo only, `oFF` ignores sync. As a plugin, the DAW's tempo and transport follow the same setting.
+- All Sound Off (CC 120) and Active Sensing are recognised.
+- Extended mode adds velocity (fixed, linear or soft curve), Note Off, MIDI learn for every knob and button, and export of your patterns as MIDI files (MIDI button in the top bar).
 
-**EXT SOURCE**: play the live input like a pad, through the effects, with its own level and GATE.
+**Safety**: nothing louder than full scale and nothing broken (NaN / Inf) ever leaves SPSX, in either mode. A final brickwall sits after everything else and is completely transparent below 0 dBFS, a runaway effect is reset, corrupt audio files and bad host input are cleaned before use, and the output fades in after a fault or an audio device change.
 
-**Resample**: RESAMPLE, set the level with CTRL 3, REC, pick an empty pad, REC, then hit the source pad: playback and recording start together. Polyphony drops to 4 mono / 2 stereo while resampling, as on the hardware.
+**Stability and speed**: PAUSE no longer drops scheduled note-offs, faster event queue and sample-rate converter, and the panel redraws only what changed.
 
-**MIC**: MIC uses the first input channel of the selected input device with MIC LEVEL; otherwise the input is stereo LINE with INPUT GAIN (FUNC + pad 11). Pick your Mac's built-in mic or your interface in the audio settings.
-
-**Plugin FX Mode**: run the track's audio through the effects (top bar, plugin only). For instruments in Logic, route audio via the side-chain input.
+## Earlier (0.4.0)
+All 29 effects with Effect Limit, Effect Grab and REMAIN targets; sampling with auto trigger and count-in; EXT SOURCE; resample; plugin FX Mode.
 
 ## Still to come
-Pattern sequencer (Phase 5), MIDI (Phase 6), song mode and export (Phase 7), stickers (Phase 8), settings window (Phase 9). Backup load/save and pattern copy/exchange show `ENP` until then.
+Song mode, second effect slot, mixdown and stems, projects with autosave (Phase 7), stickers (Phase 8), settings window with MIDI out and learn profiles (Phase 9). Backup load/save shows `ENP` until then.
 
 ## Install (macOS)
 The download contains `SPSX.component` (AU), `SPSX.vst3` and `SPSX.app` (standalone), universal (Apple Silicon and Intel).
@@ -43,4 +40,4 @@ xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/SPSX.componen
 Copy `SPSX.vst3` to `~/.vst3/`. `SPSX` is the standalone binary.
 
 ## Validation for this build
-Unit tests pass on macOS and Linux (including every effect at its parameter extremes, click-free switching and zero allocations on the audio thread). AU and VST3 passed pluginval at strictness 10 on macOS and the AU passed `auval -strict`.
+156 unit tests pass on macOS and Linux, including every effect at its parameter extremes, sample-accurate sequencing and MIDI, an output-safety fuzz test and zero allocations on the audio thread. AU and VST3 passed pluginval at strictness 10 on macOS and the AU passed `auval -strict`.

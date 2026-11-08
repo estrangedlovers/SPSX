@@ -10,6 +10,8 @@ namespace spsx
         maxDeviceBlock = juce::jmax (1, maxDeviceBlockIn);
         deviceTime = 0;
         underflows = 0;
+        guard.prepare (deviceRateIn, preparedOnce);
+        preparedOnce = true;
         converting = limits.internal44k && std::abs (deviceRate - kEngineRate) > 1e-6;
 
         if (! converting)
@@ -80,6 +82,14 @@ namespace spsx
                 outPtrs[ch] = out[ch] + done;
             processChunk (inPtrs, numIn, outPtrs, juce::jmin (numOut, 8), m);
             done += m;
+        }
+
+        // Nothing louder than full scale and nothing non-finite reaches the host.
+        guard.process (out, numOut, n);
+        if (guard.faults() != guardFaults)
+        {
+            guardFaults = guard.faults();
+            engine.resetEffects();
         }
     }
 

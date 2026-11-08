@@ -71,8 +71,38 @@ namespace spsx::io
         return out;
     }
 
+    /** Imported audio is untrusted: NaN / Inf become silence and float files are capped
+        at +18 dBFS so a corrupt file cannot drive the effects into overflow. */
+    static bool needsSanitising (const juce::AudioBuffer<float>& b) noexcept
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        {
+            const float* x = b.getReadPointer (ch);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                if (! (std::abs (x[i]) <= kMaxImportLevel))
+                    return true;
+        }
+        return false;
+    }
+
+    void sanitise (juce::AudioBuffer<float>& b) noexcept
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        {
+            float* x = b.getWritePointer (ch);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                x[i] = std::isfinite (x[i]) ? std::clamp (x[i], -kMaxImportLevel, kMaxImportLevel) : 0.0f;
+        }
+    }
+
     SampleData::Ptr makeSample (const juce::AudioBuffer<float>& audio, double rate, bool quantize16)
     {
+        if (needsSanitising (audio))
+        {
+            juce::AudioBuffer<float> clean (audio);
+            sanitise (clean);
+            return makeSample (clean, rate, quantize16);
+        }
         auto converted = toEngineRate (audio, rate);
         if (quantize16)
             requantize16 (converted);

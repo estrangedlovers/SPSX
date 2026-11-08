@@ -19,14 +19,15 @@ namespace spsx
     struct SeqEvent
     {
         std::int32_t tick = 0;       // 0 .. length-1
-        std::int32_t length = 1;     // ticks the pad was held (for GATE samples)
+        std::int32_t length = 1;     // ticks the pad was held (for GATE samples); 0 = no release
         std::int16_t pad = 0;
+        std::uint8_t velocity = 127; // Extended MIDI velocity (127 = full level)
         std::uint16_t pass = 0;      // recording pass (playback skips events recorded this pass)
         std::uint32_t id = 0;        // stable id while recording (to set the length on release)
 
         friend bool operator== (const SeqEvent& a, const SeqEvent& b)
         {
-            return a.tick == b.tick && a.length == b.length && a.pad == b.pad;
+            return a.tick == b.tick && a.length == b.length && a.pad == b.pad && a.velocity == b.velocity;
         }
     };
 

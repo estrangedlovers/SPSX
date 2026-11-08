@@ -4,7 +4,7 @@ SPSX: a recreation of a 2009 12-pad phrase sampler (7-segment display model) as 
 
 ## Start here
 1. `docs/PROGRESS.md`: current phase, open questions, next step.
-2. `docs/SPEC.md`: hardware behaviour (the manual is the source of truth for Authentic mode). Section 0: prompt-vs-manual conflicts. Section 14: undocumented behaviours and working decisions (U1..U43).
+2. `docs/SPEC.md`: hardware behaviour (the manual is the source of truth for Authentic mode). Section 0: prompt-vs-manual conflicts. Section 14: undocumented behaviours and working decisions (U1..U56).
 3. `docs/ARCHITECTURE.md`: modules, threading, timing model, state, Authentic/Extended via `Limits`.
 4. `docs/PLAN.md`: phase tasks. `docs/FIDELITY.md`: per-DSP-block confidence and parameters.
 
@@ -24,7 +24,7 @@ ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "
 - Headless render: `build/tools/render_cli/render_cli --pad A1=kick.wav --script hits.txt --out out.wav --rate 48000` (script format at the top of `tools/render_cli/main.cpp`).
 
 ## Layout
-- `src/core/`: everything testable without a GUI. `engine/` (Engine, EngineHost, Voice, VoicePool, RecordTap), `fx/` (29 effects, EffectHost, EffectInfo, DspUtil), `dsp/` (SincResampler, LoFi, GranularStretcher), `sampler/` (SampleEdit, TimeModify, StretchRenderer), `state/` (SampleData, PadSettings, Project), `io/` (AudioFileIO), `SamplerController` (message-thread facade), `Limits.h`, `Tempo.h`, `CancelDetector.h`, `RealtimeGuard.h`.
+- `src/core/`: everything testable without a GUI. `engine/` (Engine, EngineHost, Sequencer, Voice, VoicePool, RecordTap, OutputGuard), `fx/` (29 effects, EffectHost, EffectInfo, DspUtil), `dsp/` (SincResampler, LoFi, GranularStretcher), `midi/` (MidiInput, MidiSettings, MidiFileExport), `sampler/` (SampleEdit, TimeModify, StretchRenderer), `state/` (SampleData, PadSettings, Project), `io/` (AudioFileIO), `SamplerController` (message-thread facade), `Limits.h`, `Tempo.h`, `CancelDetector.h`, `RealtimeGuard.h`.
 - `src/core/ui_model/`: PanelModel (panel state machine), Controls, DisplayText (7-segment glyphs).
 - `src/ui/`: PanelLayout (geometry), PanelComponent (drawing + mouse), KeyMap, SidePanel (Extended).
 - `src/plugin/`: AudioProcessor (owns Engine, SamplerController, PanelModel) + editor.

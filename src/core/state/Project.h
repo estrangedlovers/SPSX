@@ -18,6 +18,17 @@ namespace spsx
         bool isEmpty() const noexcept { return sample == nullptr; }
     };
 
+    /** Extended MIDI learn: a Control Change bound to a knob or a button. */
+    struct MidiBinding
+    {
+        int  channel = 1;    // 1..16
+        int  cc = 0;         // 0..127
+        bool knob = true;    // knob (value 0..127 = position) or button (>= 64 = pressed)
+        int  id = 0;         // Knob or Control
+
+        friend bool operator== (const MidiBinding&, const MidiBinding&) = default;
+    };
+
     /** Device-wide settings the hardware keeps internally (FUNC menu, manual p. 39-47). */
     struct DeviceSettings
     {
@@ -29,6 +40,8 @@ namespace spsx
         int  midiSync       = 0;     // 0 AUt (default), 1 tNp, 2 oFF
         int  autoTrigLevel  = 0;     // 0..9, 0 = off
         bool aiffFiles      = false; // file type for new samples (WAV default)
+        int  velocityCurve  = 2;     // Extended: 0 fixed, 1 linear, 2 soft (SPEC U52)
+        std::vector<MidiBinding> midiMap;   // Extended MIDI learn
 
         friend bool operator== (const DeviceSettings&, const DeviceSettings&) = default;
     };

@@ -111,6 +111,20 @@ Effect switching: "seamless" (p. 2). Implementation: 20 ms equal-power crossfade
 | Count-in | One measure, -4..-1 | | High |
 | Metronome | Volume adjustable | Decaying sine click, 1.76 kHz accent on beat 1, 1.32 kHz otherwise, 25 ms decay, sample-accurate | Low (sound), High (timing) |
 
+## MIDI (Phase 6)
+
+| Block | Documented | Implemented | Confidence |
+|---|---|---|---|
+| Note map | 46..106, Base Ch / Base Ch + 1 (p. 47) | As documented; Base Ch 16 wraps to 1 (U17) | High (map), Low (wrap) |
+| Velocity, Note Off | Chart: velocity recognised, Note Off not (p. 48) | Authentic: velocity ignored (U5), Note On is a one-shot hit (U6, U56). Extended: curves (U52), Note Off releases | Low |
+| Sync AUt / tNp / oFF | p. 47 | Clock tempo over one beat (U54); Start / Continue / Stop / Song Position in AUt; block split at those messages so the sequencer starts on their sample | Medium |
+| All Sound Off, Active Sensing | Chart (p. 48) | CC 120 on any channel; 300 ms sensing timeout (U55) | High / Low |
+| Clock jitter | Not documented | Position interpolated between clocks, tempo averaged; sequencer re-locks only when more than 2 ticks off | Medium |
+
+## Output safety
+
+Not a hardware block: a guarantee of the app. The final stage after sample-rate conversion (`engine/OutputGuard.h`) never lets a sample above 0 dBFS or a NaN / Inf reach the device or host, in either mode. Below full scale it is bit-transparent, so Authentic output and every bit-exact test are unchanged. The effect bus is reset if it runs away (above +36 dBFS summed or non-finite), imported files are sanitised (NaN / Inf to silence, capped at +18 dBFS) and the plugin's input is cleaned of NaN / Inf. A fuzz test drives random pads, effects, extreme parameters, +12 dB output gain and full-scale noise input in both modes and requires every output sample to stay finite and within full scale.
+
 ## How this file is maintained
 
 Each row gets updated in Phase 10 with: reference material used, whether it was lossless, what matched, what did not, and the new confidence.

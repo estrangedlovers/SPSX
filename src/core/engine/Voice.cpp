@@ -19,7 +19,7 @@ namespace spsx
         state = State::idle;
     }
 
-    void Voice::start (PadId padIn, const Source& src, const PadSettings& s, std::int64_t now)
+    void Voice::start (PadId padIn, const Source& src, const PadSettings& s, std::int64_t now, float velocityGain)
     {
         send = -1.0f;   // set on first render from the target state (no glide at note start)
         pad = padIn;
@@ -29,7 +29,8 @@ namespace spsx
         reverse = s.reverse;
         increment = kEngineRate / engineRate;
         started = now;
-        gain = (float) s.level / 127.0f;
+        velocity = juce::jlimit (0.0f, 1.0f, velocityGain);
+        gain = (float) s.level / 127.0f * velocity;
         releaseGain = 1.0f;
         releaseStep = 0.0f;
         heldByPad = heldBySub = latched = false;
@@ -175,7 +176,7 @@ namespace spsx
         lofiWasOn = s.lofi;
 
         // LEVEL: linear 0..127 (FIDELITY: mapping unverified). Ramp across the block.
-        const float target = (float) s.level / 127.0f;
+        const float target = (float) s.level / 127.0f * velocity;
         const float gStep = produced > 0 ? (target - gain) / (float) produced : 0.0f;
 
         for (int i = 0; i < produced; ++i)

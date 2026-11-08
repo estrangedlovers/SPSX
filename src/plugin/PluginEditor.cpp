@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "../ui/PanelLayout.h"
+#include "../core/midi/MidiFileExport.h"
 
 namespace spsx
 {
@@ -37,6 +38,14 @@ namespace spsx
         fxModeButton.onClick = [this] { proc.setFxMode (fxModeButton.getToggleState()); };
         if (proc.wrapperType != juce::AudioProcessor::wrapperType_Standalone)
             addAndMakeVisible (fxModeButton);
+
+        // Extended MIDI: learn, velocity curve, pattern export.
+        midiButton.setWantsKeyboardFocus (false);
+        midiButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd04020));
+        midiButton.setTooltip ("MIDI learn, velocity curve and pattern export (Extended)");
+        midiButton.onClick = [this] { showMidiMenu(); };
+        addChildComponent (midiButton);
+        panel.onLearnTargetChanged = [this] { updateLearnStatus(); };
 
         status.setColour (juce::Label::textColourId, juce::Colour (0xff8d8e8a));
         status.setJustificationType (juce::Justification::centredRight);
@@ -94,6 +103,14 @@ namespace spsx
     {
         const bool ext = proc.isExtended();
         side.setVisible (ext);
+        midiButton.setVisible (ext);
+        if (! ext && panel.isLearnMode())
+        {
+            panel.setLearnMode (false);
+            model.armMidiLearn (std::nullopt);
+            midiButton.setToggleState (false, juce::dontSendNotification);
+            updateLearnStatus();
+        }
 
         // Keep the panel's 1000 x 1450 aspect; the side panel adds a fixed-width column
         // scaled with the panel.
@@ -131,6 +148,11 @@ namespace spsx
             bar.removeFromLeft (8);
             fxModeButton.setBounds (bar.removeFromLeft (80));
         }
+        if (midiButton.isVisible())
+        {
+            bar.removeFromLeft (8);
+            midiButton.setBounds (bar.removeFromLeft (64));
+        }
         status.setBounds (bar);
 
         if (proc.isExtended())
@@ -138,8 +160,82 @@ namespace spsx
         panel.setBounds (r);
     }
 
+    void PluginEditor::showMidiMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem ("MIDI learn (click a knob or button, then move a controller)", true, panel.isLearnMode(), [this]
+        {
+            panel.setLearnMode (! panel.isLearnMode());
+            if (! panel.isLearnMode())
+                model.armMidiLearn (std::nullopt);
+            midiButton.setToggleState (panel.isLearnMode(), juce::dontSendNotification);
+            updateLearnStatus();
+        });
+        const auto mappings = (int) proc.getController().project().device.midiMap.size();
+        m.addItem ("Clear MIDI mappings (" + juce::String (mappings) + ")", mappings > 0, false, [this]
+        {
+            model.clearMidiMap();
+            updateLearnStatus();
+        });
+        m.addSeparator();
+        juce::PopupMenu curves;
+        const int curve = proc.getController().project().device.velocityCurve;
+        const char* names[] = { "Fixed (full level)", "Linear", "Soft" };
+        for (int i = 0; i < 3; ++i)
+            curves.addItem (names[i], true, curve == i, [this, i] { model.setVelocityCurve (i); });
+        m.addSubMenu ("Velocity curve", curves);
+        m.addSeparator();
+        m.addItem ("Export patterns as MIDI files...", [this] { exportPatterns(); });
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (midiButton));
+    }
+
+    void PluginEditor::updateLearnStatus()
+    {
+        if (! panel.isLearnMode())
+        {
+            status.setText ({}, juce::dontSendNotification);
+            return;
+        }
+        if (auto t = model.midiLearnTarget())
+            status.setText (juce::String ("Learn: move a controller for ")
+                                + (t->knob ? knobName ((Knob) t->id) : controlName ((Control) t->id)),
+                            juce::dontSendNotification);
+        else
+            status.setText ("Learn: click a knob or button", juce::dontSendNotification);
+    }
+
+    void PluginEditor::exportPatterns()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Export patterns to folder",
+                                                       juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [this] (const juce::FileChooser& fc)
+        {
+            const auto dir = fc.getResult();
+            if (! dir.isDirectory())
+                return;
+            const auto& project = proc.getController().project();
+            int written = 0;
+            for (int i = 0; i < (int) project.patterns.size(); ++i)
+            {
+                const auto& pat = project.patterns[(size_t) i];
+                if (pat == nullptr)
+                    continue;
+                const auto id = PadId::fromIndex (i);
+                const auto name = juce::String ("Pattern ") + juce::String::charToString ((juce::juce_wchar) ('A' + id.bank))
+                                  + juce::String (id.pad + 1) + ".mid";
+                if (midi::exportPattern (*pat, project.device.midiChannel, dir.getChildFile (name)))
+                    ++written;
+            }
+            status.setText (juce::String (written) + (written == 1 ? " pattern" : " patterns") + " exported",
+                            juce::dontSendNotification);
+        });
+    }
+
     void PluginEditor::onFrame()
     {
+        if (panel.isLearnMode() && ! model.midiLearnTarget().has_value() && status.getText().startsWith ("Learn: move"))
+            updateLearnStatus();   // a controller was bound
         panel.refresh (now());
         if (side.isVisible())
             side.refresh();

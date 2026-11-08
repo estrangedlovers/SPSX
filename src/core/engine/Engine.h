@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../midi/MidiSettings.h"
 #include "VoicePool.h"
 #include "RecordTap.h"
 #include "Sequencer.h"
@@ -81,19 +82,22 @@ namespace spsx
             seqErasePad,              // pad, value != 0 while held
             seqEraseAll,              // value != 0 while HOLD is held
             setMetronomeLevel,        // value = 0..127
-            click                     // metronome click (value != 0 = accent); scheduled by the sequencer
+            click,                    // metronome click (value != 0 = accent); scheduled by the sequencer
+            setMidi                   // midi = the MIDI IN settings
         };
 
         Type type = Type::stopAll;
         PadId pad = kNoPad;
         double value = 0.0;
-        int index = 0;
+        int index = 0;               // padDown/padUp: 0 panel, 1 sequencer, 2 MIDI one-shot (no release follows)
+        float velocity = 1.0f;       // padDown: level scale (Extended MIDI velocity)
         SampleData* sample = nullptr;
         void* ptr = nullptr;
         std::array<float, 4> params {};
         PadSettings settings {};
         std::int64_t time = -1;
         std::uint32_t sequence = 0;   // set by Engine::schedule (keeps equal-time order)
+        MidiSettings midi {};
     };
 
     /** Recorder phases, published for the panel (display codes rdY, -1-..-4-, rEC, FUL). */
@@ -162,6 +166,12 @@ namespace spsx
         /** Audio thread, before process(): host transport for plugin builds. With `follow`
             the sequencer takes the host tempo and starts / stops with the host (p. 47). */
         void setHostTransport (bool follow, bool playing, double bpm, double ppq) noexcept;
+        /** Audio thread: clears all effect state (called by the output guard on a fault). */
+        void resetEffects() noexcept { effects.resetAll(); ++effectFaults; effectFaultFlag.store (effectFaults, std::memory_order_relaxed); }
+        /** Times the effect bus was reset because it ran away or went non-finite. */
+        int effectFaultCount() const noexcept { return effectFaultFlag.load (std::memory_order_relaxed); }
+        /** Audio thread: the MIDI settings last sent with Command::Type::setMidi. */
+        const MidiSettings& midiSettings() const noexcept { return midi; }
         void process (const float* const* in, int numIn, float* const* out, int numOut, int n) noexcept;
         std::int64_t now() const noexcept { return time; }
 
@@ -199,9 +209,9 @@ namespace spsx
         void execute (const Command& c) noexcept;
         void renderSegment (const float* const* in, int numIn, float* const* out, int numOut, int offset, int n) noexcept;
         void runRecorder (int n) noexcept;
-        void padDown (PadId p, bool viaSub) noexcept;
+        void padDown (PadId p, bool viaSub, float velocity = 1.0f) noexcept;
         void padUp (PadId p, bool viaSub) noexcept;
-        void startVoice (PadId p, bool viaSub) noexcept;
+        void startVoice (PadId p, bool viaSub, float velocity) noexcept;
         bool isTarget (PadId p) const noexcept;
         double timeModifySpeed (const PadSettings& s) const noexcept;
         void updateEffectTempo() noexcept;
@@ -252,6 +262,9 @@ namespace spsx
         Sequencer seq;
         std::array<PatternData*, kMaxPads> patternTable {};
         float metronomeLevel = 100.0f / 127.0f;
+        MidiSettings midi;
+        int effectFaults = 0;
+        std::atomic<int> effectFaultFlag { 0 };
         bool hostFollow = false, hostPlaying = false;
         double hostTempo = 0.0, hostPpq = 0.0;
         std::atomic<double> seqTempoFlag { 120.0 };
@@ -264,6 +277,7 @@ namespace spsx
         std::vector<Command> uiQueue;
 
         // audio-thread timed events (kept sorted by time)
+        static constexpr float kEffectRunaway = 64.0f;   // +36 dBFS summed L+R
         static constexpr int kTimedSize = 4096;   // sequencer note-offs can be far ahead
         std::vector<Command> timed;
         int numTimed = 0;

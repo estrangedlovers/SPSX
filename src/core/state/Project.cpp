@@ -115,7 +115,12 @@ namespace spsx
             o->setProperty ("tempo", pat->tempo);
             juce::Array<juce::var> ev;
             for (const auto& e : pat->events)
-                ev.add (juce::Array<juce::var> { e.tick, e.length, (int) e.pad });
+            {
+                juce::Array<juce::var> item { e.tick, e.length, (int) e.pad };
+                if (e.velocity != 127)
+                    item.add ((int) e.velocity);   // [tick, length, pad (, velocity)]
+                ev.add (item);
+            }
             o->setProperty ("events", ev);
             patternArray.add (o);
         }
@@ -132,6 +137,11 @@ namespace spsx
         d->setProperty ("midiSync", device.midiSync);
         d->setProperty ("autoTrigLevel", device.autoTrigLevel);
         d->setProperty ("aiffFiles", device.aiffFiles);
+        d->setProperty ("velocityCurve", device.velocityCurve);
+        juce::Array<juce::var> map;
+        for (const auto& b : device.midiMap)
+            map.add (juce::Array<juce::var> { b.channel, b.cc, b.knob ? 1 : 0, b.id });
+        d->setProperty ("midiMap", map);
         root->setProperty ("device", d);
         return root;
     }
@@ -176,8 +186,10 @@ namespace spsx
                         if (triple == nullptr || triple->size() < 3) continue;
                         SeqEvent se;
                         se.tick = (int) (*triple)[0];
-                        se.length = juce::jmax (1, (int) (*triple)[1]);
+                        se.length = juce::jmax (0, (int) (*triple)[1]);   // 0 = one-shot (MIDI)
                         se.pad = (std::int16_t) juce::jlimit (0, kMaxPads - 1, (int) (*triple)[2]);
+                        if (triple->size() > 3)
+                            se.velocity = (std::uint8_t) juce::jlimit (1, 127, (int) (*triple)[3]);
                         events.push_back (se);
                         if ((int) events.size() >= kMaxPatternEvents) break;
                     }
@@ -201,6 +213,20 @@ namespace spsx
         p.device.midiSync = d.getProperty ("midiSync", 0);
         p.device.autoTrigLevel = d.getProperty ("autoTrigLevel", 0);
         p.device.aiffFiles = d.getProperty ("aiffFiles", false);
+        p.device.velocityCurve = juce::jlimit (0, 2, (int) d.getProperty ("velocityCurve", 2));
+        p.device.midiMap.clear();
+        if (auto* map = d.getProperty ("midiMap", {}).getArray())
+            for (const auto& item : *map)
+                if (auto* a = item.getArray(); a != nullptr && a->size() >= 4)
+                {
+                    MidiBinding b;
+                    b.channel = juce::jlimit (1, 16, (int) (*a)[0]);
+                    b.cc = juce::jlimit (0, 127, (int) (*a)[1]);
+                    b.knob = (int) (*a)[2] != 0;
+                    b.id = (int) (*a)[3];
+                    if (b.id >= 0 && b.id < 256)   // PanelModel ignores ids it does not know
+                        p.device.midiMap.push_back (b);
+                }
 
         out = std::move (p);
         return juce::Result::ok();

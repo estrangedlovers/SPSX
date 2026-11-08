@@ -168,7 +168,7 @@ namespace spsx
         ++recCount;
     }
 
-    void Sequencer::padDown (int padIndex, std::int64_t time) noexcept
+    void Sequencer::padDown (int padIndex, std::int64_t time, float velocity, bool oneShot) noexcept
     {
         if (rec != RecState::recording || erasing || padIndex < 0 || padIndex >= kMaxPads)
             return;
@@ -178,11 +178,17 @@ namespace spsx
         const double raw = pos + (double) (time - posTime) * ticksPerSample;
         SeqEvent e;
         e.tick = Quantize::apply (raw, quantIndex, shufflePercent, len);
-        e.length = 1;
+        e.length = oneShot ? 0 : 1;
+        e.velocity = (std::uint8_t) std::clamp ((int) std::lround (velocity * 127.0f), 1, 127);
         e.pad = (std::int16_t) padIndex;
         e.pass = pass;
         e.id = nextId++;
         insertRecorded (e);
+        if (oneShot)
+        {
+            openNote[(size_t) padIndex] = 0;
+            return;
+        }
         openNote[(size_t) padIndex] = e.id;
         openNoteTick[(size_t) padIndex] = absTick + (double) (time - posTime) * ticksPerSample;
     }

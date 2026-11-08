@@ -1,6 +1,27 @@
 # PROGRESS
 
-## Phase 5: Pattern sequencer, plus a review and optimisation pass (status: done, awaiting review)
+## Phase 6: MIDI, plus output safety (status: done, released as v0.6.0)
+
+### Done
+- **MIDI IN** (`src/core/midi/MidiInput.h`): the manual's note map (46 EXT SOURCE, 47..106 pads on Pad Base Ch for A..E and Base Ch + 1 for F..J), FUNC + 9 channel, All Sound Off on any channel, Active Sensing timeout. Authentic follows the implementation chart: velocity and Note Off are ignored, so a Note On is a one-shot hit (a GATE sample plays out). Notes land on their exact sample.
+- **MIDI sync** (FUNC + 10): `AUt` follows clock and Start / Continue / Stop / Song Position (HOLD + pattern pad waits for Start), `tNp` follows tempo only, `oFF` ignores both. The block is split at transport messages so patterns start on the right sample. In a DAW the host's transport works the same way and obeys the same setting; incoming MIDI clock takes priority.
+- **Extended**: velocity (fixed / linear / soft curve), Note Off releases, MIDI learn for every knob and button (MIDI button in the top bar, then click a control and move a controller; saved with the project), export of all patterns as standard MIDI files on the note map.
+- Patterns now store velocity and one-shot hits (saved in the project JSON).
+- **Output safety** (both modes): nothing above 0 dBFS and nothing non-finite ever leaves the app. Final brickwall after sample-rate conversion (bit-transparent below full scale), NaN / Inf mute with a fade back in, effect bus reset if it runs away, fade-in after a re-prepare, imported files and plugin input sanitised. A fuzz test (random pads, effects, extreme parameters, +12 dB output gain, full-scale noise input, both modes) checks every output sample.
+- New working decisions U52 to U56 in SPEC section 14; U50 updated.
+- Tests: 156 test cases, all passing.
+
+### Known issues
+- The UI is still reviewed only from headless renders; please check it on your Mac.
+- EXT SOURCE from MIDI goes through the panel and lands up to one UI frame late (U53).
+- MIDI out, clock out and learn profiles are deferred to Phase 9; Ableton Link needs your approval (license).
+
+### Next
+Phase 7: Extended song features (song mode, second effect slot, mixdown and stems, projects with autosave).
+
+---
+
+## Phase 5: Pattern sequencer, plus a review and optimisation pass (status: done)
 
 ### Done
 - **Sequencer** (`src/core/engine/Sequencer`, `src/core/state/PatternData.h`): 96 PPQN patterns with their own tempo and note lengths; events go to the engine's timed queue at exact sample times; loop, reserve at pattern end, SUB PAD immediate switch, stop, HOLD + pad arm.

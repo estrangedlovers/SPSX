@@ -106,6 +106,19 @@ recorder <- effect bus (sampling) or (dry + effect) x level (resample)
 - Recording writes into a preallocated 16,000-event buffer kept sorted by tick. Hits are quantized as they are recorded; events recorded in the current pass are skipped until the next pass, so a hit never sounds twice. On stop the take is published through an atomic flag; the panel's `tick()` hands it to `SamplerController::commitRecordedPattern()`, which builds the new `PatternData`. The engine does not touch the buffer again until the next standby command.
 - Tempo: host tempo when following a host, else the playing pattern's tempo, else the tempo set on the panel. Effects sync to the pattern tempo while a pattern runs.
 
+### MIDI (Phase 6)
+
+- `midi/MidiInput`: audio-thread translator, owned by the processor. Notes become engine pad commands scheduled at the message's sample (`EngineHost::scheduleAt`); index 2 marks an Authentic one-shot (no Note Off follows), which the sequencer records with length 0. Clock, Start, Continue, Stop and Song Position produce a transport (tempo, playing, position) that replaces the DAW play head while a clock runs. The processor splits its block at Start / Stop / Continue / Song Position so the sequencer changes state on the message's sample.
+- Settings (Pad Base Ch, MIDI SYNC, the mode's Note Off / velocity / learn limits, the velocity curve) travel from PanelModel to the engine as one `setMidi` command; the processor reads them back on the audio thread.
+- EXT SOURCE notes and learn Control Changes go to the message thread through a 256-entry lock-free FIFO and are applied by PanelModel (`press` / `release`, `handleMidiControl`), so the panel stays the single source of panel behaviour.
+- `midi/MidiFileExport`: patterns as type 0 SMF at 96 PPQ on the note map, so an exported file drives SPSX from a DAW.
+
+### Output safety
+
+- `engine/OutputGuard`: last stage in `EngineHost::process`, at the device rate. Instant-attack brickwall at 0 dBFS with an 80 ms release (gain is exactly 1 below the ceiling, so it is bit-transparent), NaN / Inf mute the rest of the block with a 20 ms fade back in, and a re-prepare fades in. A fault tells the engine to reset all effect state.
+- The engine resets the effect bus itself when it exceeds +36 dBFS (summed L+R) or turns non-finite, before it reaches the mix.
+- Imported audio and plugin input are sanitised before they reach the engine.
+
 ## 3. Authentic vs Extended
 
 A single `Limits` struct is read by engine and model code:
@@ -120,6 +133,8 @@ struct Limits {
     bool steppedTempo         = true; // Ext: any 20.00..300.00
     bool honourNoteOff        = false;
     bool velocity             = false;
+    bool midiLearn            = false;  // Ext: CCs reach MIDI learn
+    double syncTempoMin = 40, syncTempoMax = 200;  // Ext: 20..300
     bool undo                 = false;
     int  banks                = 10;
     // ...
@@ -136,7 +151,7 @@ There are no `if (authentic)` branches in DSP; behaviour follows values. The UI 
 | Message (UI) | PanelModel, components, timers (60 Hz repaint via VBlankAttachment) | pushes Commands to engine FIFO; reads `AudioToUi` (voice activity, peak, tick position, recorder status) |
 | Loader pool (`juce::ThreadPool`, 2 threads) | file decode, Time Modify render, truncate, exports, resample commit | results published via atomic pointer swap of immutable `SampleData` |
 | Recorder writer | drains the recorder ring to disk | lock-free ring |
-| MIDI input callback | converts to timestamped events | SPSC FIFO into audio thread (standalone); plugin uses host MidiBuffer |
+| MIDI input | standalone: JUCE's device callback; plugin: the host | both arrive as the processor's MidiBuffer, parsed on the audio thread by `MidiInput` |
 
 Rules:
 

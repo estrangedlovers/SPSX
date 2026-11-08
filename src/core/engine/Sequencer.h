@@ -33,6 +33,7 @@ namespace spsx
             std::int64_t time;
             int pad;          // PadId index
             bool accent;      // click: first beat of the bar
+            float velocity = 1.0f;
         };
 
         void prepare (double sampleRate);
@@ -59,7 +60,9 @@ namespace spsx
         void setEraseAll (bool held) noexcept { eraseAll = held; }
 
         /** Pad pressed / released by the performer (not by the sequencer). */
-        void padDown (int padIndex, std::int64_t time) noexcept;
+        /** `oneShot`: a MIDI Note On with no Note Off to come (SPEC U6); recorded with
+            length 0, which plays back without a release. */
+        void padDown (int padIndex, std::int64_t time, float velocity = 1.0f, bool oneShot = false) noexcept;
         void padUp (int padIndex, std::int64_t time) noexcept;
 
         // ---- host / external sync -----------------------------------------------------
@@ -144,7 +147,9 @@ namespace spsx
         {
             const double off = ((double) e.tick - tickToSample) / tps;
             const auto t = blockStart + (std::int64_t) std::floor (std::max (0.0, off));
-            emit (Event { Event::Kind::padDown, t, e.pad, false });
+            emit (Event { Event::Kind::padDown, t, e.pad, false, (float) e.velocity / 127.0f });
+            if (e.length <= 0)
+                return;   // one-shot (MIDI without Note Off): no release
             const auto len = std::max<std::int64_t> (1, (std::int64_t) std::llround ((double) std::max (1, e.length) / tps));
             emit (Event { Event::Kind::padUp, t + len, e.pad, false });
         };

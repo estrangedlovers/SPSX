@@ -49,6 +49,10 @@ namespace spsx
 
         juce::TextButton authenticButton { "Authentic" }, extendedButton { "Extended" }, keysButton { "Keys  ?" };
         juce::TextButton fxModeButton { "FX Mode" };
+        juce::TextButton midiButton { "MIDI" };
+        void showMidiMenu();
+        void exportPatterns();
+        void updateLearnStatus();
         juce::Label status;
 
         std::set<int> keysDown;

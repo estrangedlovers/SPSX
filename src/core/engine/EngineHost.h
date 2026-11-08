@@ -2,6 +2,7 @@
 
 #include "Engine.h"
 #include "../dsp/SincResampler.h"
+#include "OutputGuard.h"
 
 namespace spsx
 {
@@ -43,6 +44,8 @@ namespace spsx
         /** Times the engine had to read input that had not arrived (should stay 0). */
         int underflowCount() const noexcept { return underflows; }
         double engineRate() const noexcept { return engine.getRate(); }
+        /** The final safety stage (see OutputGuard). */
+        const OutputGuard& outputGuard() const noexcept { return guard; }
 
     private:
         void processChunk (const float* const* in, int numIn, float* const* out, int numOut, int n) noexcept;
@@ -57,6 +60,9 @@ namespace spsx
         int inputLatency = 0;
         std::int64_t deviceTime = 0;
         int underflows = 0;
+        OutputGuard guard;
+        int guardFaults = 0;
+        bool preparedOnce = false;
 
         dsp::SincResampler inRs, outRs;
         std::vector<float> inFifo[2];
