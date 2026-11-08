@@ -2,6 +2,8 @@
 
 #include "VoicePool.h"
 #include "RecordTap.h"
+#include "Sequencer.h"
+#include "../state/PatternData.h"
 #include "../Limits.h"
 #include "../state/SampleData.h"
 #include "../state/PadSettings.h"
@@ -60,7 +62,26 @@ namespace spsx
                                       // params = { auto-trigger gain or 0, count-in beats, wait-for-start }, value = tempo
             recStart,                 // starts an armed wait-for-start recording (resample)
             recStop,
-            recCancel
+            recCancel,
+
+            // pattern sequencer (Phase 5)
+            seqSetPattern,            // index = pattern (PadId index), ptr = PatternData* (one reference transfers)
+            seqPlay,                  // index = pattern: start now from the top
+            seqReserve,               // index = pattern: start when the current one ends
+            seqStop,
+            seqArm,                   // index = pattern (-1 = none): wait for host / MIDI start
+            seqRecStandby,            // index = pattern, value = length in bars
+            seqRecStart,              // count-in, then record
+            seqRehearsal,             // toggle rehearsal
+            seqRecStop,               // commit the take
+            seqRecCancel,
+            seqLength,                // value = bars
+            seqQuantize,              // index = quantize setting, value = shuffle
+            seqErase,                 // value != 0: erase mode (DEL during recording)
+            seqErasePad,              // pad, value != 0 while held
+            seqEraseAll,              // value != 0 while HOLD is held
+            setMetronomeLevel,        // value = 0..127
+            click                     // metronome click (value != 0 = accent); scheduled by the sequencer
         };
 
         Type type = Type::stopAll;
@@ -110,6 +131,8 @@ namespace spsx
         bool postSample (PadId pad, SampleData::Ptr s);
         bool postStretched (PadId pad, SampleData::Ptr s, double speed);
         bool postSettings (PadId pad, const PadSettings& settings);
+        /** Publishes a pattern (nullptr clears it). Takes its own reference. */
+        bool postPattern (int index, PatternData::Ptr pattern);
         void collectGarbage();
 
         // ---- any thread (lock-free reads) -------------------------------------------
@@ -127,9 +150,17 @@ namespace spsx
         bool isTapAttached() const noexcept { return tapAttached.load (std::memory_order_acquire); }
         /** Tempo synced effects follow (longest targeted sample, else pattern). */
         double effectTempo() const noexcept { return effectTempoFlag.load (std::memory_order_relaxed); }
+        /** Sequencer state (atomics) and, after a recording stops, its take. */
+        Sequencer& sequencer() noexcept { return seq; }
+        const Sequencer& sequencer() const noexcept { return seq; }
+        /** Tempo the sequencer runs at (host tempo when following the host). */
+        double sequencerTempo() const noexcept { return seqTempoFlag.load (std::memory_order_relaxed); }
 
         // ---- audio thread ------------------------------------------------------------
         void schedule (const Command& c) noexcept;
+        /** Audio thread, before process(): host transport for plugin builds. With `follow`
+            the sequencer takes the host tempo and starts / stops with the host (p. 47). */
+        void setHostTransport (bool follow, bool playing, double bpm, double ppq) noexcept;
         void process (const float* const* in, int numIn, float* const* out, int numOut, int n) noexcept;
         std::int64_t now() const noexcept { return time; }
 
@@ -146,11 +177,11 @@ namespace spsx
         struct Click
         {
             float phase = 0.0f, inc = 0.0f, amp = 0.0f, decay = 0.999f;
-            void trigger (bool accent, double sr) noexcept
+            void trigger (bool accent, double sr, float level = 1.0f) noexcept
             {
                 phase = 0.0f;
                 inc = (float) ((accent ? 1760.0 : 1320.0) / sr);
-                amp = accent ? 0.5f : 0.35f;
+                amp = (accent ? 0.5f : 0.35f) * level;
                 decay = (float) std::exp (-1.0 / (0.025 * sr));
             }
             float next() noexcept
@@ -175,7 +206,7 @@ namespace spsx
         void updateEffectTempo() noexcept;
         void detachTap (RecPhase finalPhase) noexcept;
         Voice::Source sourceFor (const PadState& ps) const noexcept;
-        void retire (SampleData* s) noexcept;
+        void retire (juce::ReferenceCountedObject* s) noexcept;
         void flushRetired() noexcept;
         void publishState() noexcept;
 
@@ -216,6 +247,14 @@ namespace spsx
         int countInBeats = 0;
         Click click;
 
+        // pattern sequencer
+        Sequencer seq;
+        std::array<PatternData*, kMaxPads> patternTable {};
+        float metronomeLevel = 100.0f / 127.0f;
+        bool hostFollow = false, hostPlaying = false;
+        double hostTempo = 0.0, hostPpq = 0.0;
+        std::atomic<double> seqTempoFlag { 120.0 };
+
         std::vector<float> bus[6];    // dry L/R, fx L/R, live L/R
 
         // UI -> audio
@@ -224,16 +263,16 @@ namespace spsx
         std::vector<Command> uiQueue;
 
         // audio-thread timed events (kept sorted by time)
-        static constexpr int kTimedSize = 1024;
+        static constexpr int kTimedSize = 4096;   // sequencer note-offs can be far ahead
         std::vector<Command> timed;
         int numTimed = 0;
 
         // retired samples waiting until no voice uses them, then audio -> message
         static constexpr int kRetireSize = 256;
-        std::array<SampleData*, kRetireSize> retired {};
+        std::array<juce::ReferenceCountedObject*, kRetireSize> retired {};
         int numRetired = 0;
         juce::AbstractFifo garbageFifo { kRetireSize };
-        std::array<SampleData*, kRetireSize> garbage {};
+        std::array<juce::ReferenceCountedObject*, kRetireSize> garbage {};
 
         std::array<std::atomic<SampleIndex>, kMaxPads> positions;
         std::array<std::int64_t, kMaxPads> publishedStart {};

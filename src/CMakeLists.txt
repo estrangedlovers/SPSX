@@ -2,6 +2,7 @@ target_sources(SPSX PRIVATE
     core/engine/Engine.cpp
     core/engine/EngineHost.cpp
     core/engine/Voice.cpp
+    core/engine/Sequencer.cpp
     core/io/AudioFileIO.cpp
     core/sampler/SampleEdit.cpp
     core/sampler/StretchRenderer.cpp

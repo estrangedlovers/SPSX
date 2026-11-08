@@ -45,6 +45,17 @@ namespace spsx
         const PadSettings* settings (PadId pad) const;
 
         void setPatternTempo (double bpm);
+
+        // ---- patterns (Phase 5) ----------------------------------------------------------
+        bool hasPattern (PadId pad) const;
+        Status setPattern (PadId pad, PatternData::Ptr pattern);
+        Status deletePattern (PadId pad);
+        Status copyPattern (PadId from, PadId to);
+        Status exchangePatterns (PadId a, PadId b);
+        /** Stores the sequencer's finished take (after Engine::sequencer().takeResult()). */
+        Status commitRecordedPattern();
+        /** Sets the tempo of a stored pattern (TIME/BPM in pattern mode). */
+        void setPatternTempoOf (PadId pad, double bpm);
         void setOutputGainDb (int db);
         void setVolume (double knob01);
 
@@ -86,6 +97,8 @@ namespace spsx
         void finishRecording (bool keep);
 
         bool isProtected (PadId pad) const;
+        bool isPatternProtected (PadId pad) const;
+        void pushPattern (PadId pad);
         void pushPad (PadId pad);
         void requestStretch (PadId pad);
 

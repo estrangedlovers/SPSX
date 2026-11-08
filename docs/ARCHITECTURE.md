@@ -99,6 +99,13 @@ recorder <- effect bus (sampling) or (dry + effect) x level (resample)
 - The recorder is a state machine on the audio thread (waiting for start, waiting for trigger, count-in, recording, full) writing into a `RecordTap` (lock-free FIFO, 10 s). `SamplerController::RecordingSession` owns the tap and a writer thread that drains it to the file. The engine signals with an atomic when it has let go of the tap; only then does the session close the file, and the new sample is loaded on the worker pool and assigned to the pad.
 - Resample arms with "wait for start"; the panel posts the source pad's `padDown` and `recStart` together, so playback and recording begin on the same sample.
 
+### Pattern sequencer (Phase 5)
+
+- `state/PatternData`: immutable, reference-counted pattern (length in bars, tempo, events sorted by tick at 96 PPQN). Published to the engine like samples (`Engine::postPattern`), retired through the same garbage FIFO.
+- `engine/Sequencer`: owned by the engine, audio thread only. Each block it emits pad down / pad up / metronome-click events with absolute sample times into the engine's timed queue (4096 entries), so the segment loop triggers them sample-accurately. The play head maps to engine time through `(pos, posTime)`, so a pad hit from the panel (block start) or a timed command (mid-block) is placed on the right tick.
+- Recording writes into a preallocated 16,000-event buffer kept sorted by tick. Hits are quantized as they are recorded; events recorded in the current pass are skipped until the next pass, so a hit never sounds twice. On stop the take is published through an atomic flag; the panel's `tick()` hands it to `SamplerController::commitRecordedPattern()`, which builds the new `PatternData`. The engine does not touch the buffer again until the next standby command.
+- Tempo: host tempo when following a host, else the playing pattern's tempo, else the tempo set on the panel. Effects sync to the pattern tempo while a pattern runs.
+
 ## 3. Authentic vs Extended
 
 A single `Limits` struct is read by engine and model code:

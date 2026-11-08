@@ -2,6 +2,7 @@
 
 #include "SampleData.h"
 #include "PadSettings.h"
+#include "PatternData.h"
 #include <juce_core/juce_core.h>
 #include <vector>
 
@@ -39,6 +40,7 @@ namespace spsx
 
         int numBanks;
         std::vector<PadSlot> pads;                 // numBanks * 12
+        std::vector<PatternData::Ptr> patterns;    // numBanks * 12 (nullptr = empty)
         std::vector<bool> sampleBankProtected;     // per bank (manual p. 38)
         std::vector<bool> patternBankProtected;
         double patternTempo = 120.0;
@@ -46,6 +48,8 @@ namespace spsx
 
         PadSlot&       slot (PadId p)       { return pads[(size_t) p.index()]; }
         const PadSlot& slot (PadId p) const { return pads[(size_t) p.index()]; }
+        PatternData::Ptr& pattern (PadId p)       { return patterns[(size_t) p.index()]; }
+        const PatternData::Ptr& pattern (PadId p) const { return patterns[(size_t) p.index()]; }
 
         /** Settings and file references only; audio is stored as files beside the JSON. */
         juce::var toVar() const;

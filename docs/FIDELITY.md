@@ -107,9 +107,9 @@ Effect switching: "seamless" (p. 2). Implementation: 20 ms equal-power crossfade
 | 96 PPQN | p. 49 | Events stored in ticks, rendered sample-accurately | High |
 | Tempo steps | p. 15 | 127-value table | High |
 | Quantize values | p. 32 | | High |
-| Shuffle | 50 straight, 60..66 typical | Swing ratio = value/100 of the pair length for the off-beat of the grid | Medium |
+| Shuffle | 50 straight, 60..66 typical | Implemented at record time: the off-beat of each grid pair moves to `value` % of the pair (range 50..75, SPEC U13) | Medium |
 | Count-in | One measure, -4..-1 | | High |
-| Metronome | Volume adjustable | Click sound design | Low |
+| Metronome | Volume adjustable | Decaying sine click, 1.76 kHz accent on beat 1, 1.32 kHz otherwise, 25 ms decay, sample-accurate | Low (sound), High (timing) |
 
 ## How this file is maintained
 

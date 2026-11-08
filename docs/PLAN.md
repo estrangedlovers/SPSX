@@ -50,13 +50,13 @@ Each phase ends with: clean build, tests green, `docs/PROGRESS.md` updated, comm
 - [x] Resample: RESAMPLE (LEU), CTRL 3 level, 4-voice budget, empty destination, armed start on the source pad
 - [x] Plugin: input bus sampling; FX Mode (track audio through the effects)
 
-## Phase 5: Pattern sequencer
-1. Pattern data (96 PPQN), tempo table, length rules (1..20, then 4-bar steps).
-2. Recording flow: standby, metronome, count-in, loop recording, overdub, rehearsal, quantize (10 settings) + shuffle, change quantize live, erase (pad / HOLD = all), CANCEL commit.
-3. Playback: start, reserve next, SUB PAD immediate, stop, CANCEL, illumination tempo blink.
-4. Delete, delete all, copy, exchange, protect for patterns.
-5. Plugin: host tempo/transport follow.
-6. Tests for every item above.
+## Phase 5: Pattern sequencer (done)
+- [x] PatternData (96 PPQN, sorted events with lengths, own tempo), project storage + JSON
+- [x] Engine sequencer: sample-accurate events through the timed queue, loop, reserve at pattern end, SUB PAD immediate switch, stop, arm
+- [x] Recording: standby metronome, one-bar count-in, loop recording with overdub, quantize (10 settings) with shuffle at record time, rehearsal, erase (pad / HOLD = all), length rules, 16,000-note buffer, CANCEL commits
+- [x] Panel: PATTERN SELECT play / reserve / stop, REC flow, LENGTH, QUANTIZE (+ shuffle), metronome level, TIME/BPM per pattern, DEL / CANCEL + DEL / FUNC copy and exchange for patterns, displays (Ptn, -4..-1, M.b, rEH, ErS), tempo-blinking ring
+- [x] Plugin: host tempo and transport (HOLD + pad arms for host start)
+- [x] Tests: quantize grids, shuffle, count-in, sample accuracy, looping, reserve/immediate switch, overdub, no double triggers, note lengths, rehearsal, erase, length rules, metronome, host sync, JSON, panel flows, real-time safety
 
 ## Phase 6: MIDI
 1. Authentic: note map (46..106, Base Ch / Base Ch+1), channel setting, sync modes AUt/tNp/oFF, Song Position, All Sound Off, Active Sensing, HOLD+pad wait-for-start.

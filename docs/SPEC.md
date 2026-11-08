@@ -728,3 +728,11 @@ Implications: no MIDI out of any kind; no CC; Note Off is not recognized (U6); A
 | U41 | What resample records | The mix after the effect, before OUTPUT GAIN and VOLUME, times CTRL 3 level **[assumed]** |
 | U42 | EXT SOURCE STEREO | The same STEREO setting as sampling (one button) **[assumed]** |
 | U43 | Slicer: repeated slices | A 1 ms dip at each onset that follows a sounding step, so repeated slices articulate **[design choice]** |
+| U44 | Pattern tempo | Each pattern stores its tempo; a playing pattern runs at it, TIME/BPM in pattern mode edits the playing (or last chosen) pattern, a new recording takes the tempo set in standby **[assumed]** |
+| U45 | Display while recording a pattern | Measure and beat as `M.b` (` 1.1` .. `99.4`); count-in `-4` .. `-1` (documented) **[format assumed]** |
+| U46 | Reserved / armed pattern pads | Blink fast, to tell them from pads that merely hold a pattern (which blink) **[assumed]** |
+| U47 | Pads in ErS (erase) mode | Erase only; they do not sound **[assumed]** |
+| U48 | Hits during the count-in | Not recorded **[assumed]** |
+| U49 | Stopping a pattern | Stops the sequencer; samples already sounding play on (CANCEL x4 stops them) **[assumed]** |
+| U50 | Plugin host sync | Like MIDI sync `AUt`: the host's tempo drives the sequencer; HOLD + pattern pad arms it to start with the host's transport (at the host's bar position); the host stopping stops it; with the host stopped, patterns still play by hand **[design choice]** |
+| U51 | Note length of recorded hits | Recorded from pad release (needed for GATE samples); a pad still held when recording stops ends there (SPEC U14) **[assumed]** |

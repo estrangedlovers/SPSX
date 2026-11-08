@@ -193,6 +193,26 @@ namespace spsx
         return p.isValid() && p.bank < controller.project().numBanks && ! controller.project().slot (p).isEmpty();
     }
 
+    bool PanelModel::hasPattern (PadId p) const
+    {
+        return controller.hasPattern (p);
+    }
+
+    PadId PanelModel::playingPattern() const
+    {
+        const int i = engine.sequencer().playingIndex();
+        return i >= 0 ? PadId::fromIndex (i) : kNoPad;
+    }
+
+    void PanelModel::sendQuantize()
+    {
+        Command c;
+        c.type = Command::Type::seqQuantize;
+        c.index = seq.quantizeIndex;
+        c.value = seq.shuffle;
+        engine.post (c);
+    }
+
     bool PanelModel::bankProtected (int b) const
     {
         const auto& prot = patternMode ? controller.project().patternBankProtected : controller.project().sampleBankProtected;
@@ -322,13 +342,15 @@ namespace spsx
 
             case Control::hold:
                 holdHeld = true;
-                if (op.op == Op::none)
+                if (patErase)
+                    sendEngine (Command::Type::seqEraseAll, kNoPad, 1.0);   // HOLD erases every pad (p. 33)
+                else if (op.op == Op::none)
                     sendEngine (Command::Type::holdDown);
                 break;
 
             case Control::subPad:
                 subHeld = true;
-                if (op.op == Op::none && ! patternMode)
+                if (op.op == Op::none && (! patternMode || patRec == PatRec::standby || patRec == PatRec::active))
                     sendEngine (Command::Type::subDown);
                 break;
 
@@ -349,10 +371,14 @@ namespace spsx
             case Control::cancel:  cancelHeld = false; return;
             case Control::mark:    markHeld = false; return;
             case Control::tapTempo: tapHeld = false; return;
-            case Control::hold:    holdHeld = false; return;
+            case Control::hold:
+                holdHeld = false;
+                if (patErase)
+                    sendEngine (Command::Type::seqEraseAll, kNoPad, 0.0);
+                return;
             case Control::extSource: releaseExt(); return;
             case Control::subPad:
-                if (subHeld && ! patternMode)
+                if (subHeld && (! patternMode || patRec == PatRec::standby || patRec == PatRec::active))
                     sendEngine (Command::Type::subUp);
                 subHeld = false;
                 return;
@@ -439,8 +465,18 @@ namespace spsx
             resample = Resample::padChosen;
             return;
         }
-        if (patternMode)
-            return;   // pattern playback arrives in Phase 5
+        if (patternMode && (patRec == PatRec::none || patRec == PatRec::choosePad))
+        {
+            pressPatternPad (pad, now);
+            return;
+        }
+        if (patErase)
+        {
+            // ErS: hold a pad to erase its notes as the pattern passes (p. 33).
+            padsErasing.set ((size_t) index);
+            sendEngine (Command::Type::seqErasePad, pad, 1.0);
+            return;
+        }
 
         if (markHeld && ! markSession && hasSample (pad))
         {
@@ -471,6 +507,12 @@ namespace spsx
 
     void PanelModel::releasePad (int index)
     {
+        if (padsErasing.test ((size_t) index))
+        {
+            padsErasing.reset ((size_t) index);
+            sendEngine (Command::Type::seqErasePad, padAt (index), 0.0);
+            return;
+        }
         if (padsDownInEngine.test ((size_t) index))
         {
             sendEngine (Command::Type::padUp, padAt (index));
@@ -747,12 +789,97 @@ namespace spsx
         sendEngine (Command::Type::setVoiceBudget, kNoPad, controller.limits().channelVoices);
     }
 
+    // ---- pattern sequencer (p. 14-15, 32-34) -----------------------------------------------
+
+    void PanelModel::pressPatternPad (PadId pad, double now)
+    {
+        if (patRec == PatRec::choosePad)
+        {
+            // Choose the pattern to record: an empty pad, or an existing one to overdub.
+            if (bankProtected (pad.bank)) { flash ("Prt", now); return; }
+            patRecPad = pad;
+            patRec = PatRec::standby;
+            patErase = false;
+            const auto existing = controller.project().pattern (pad);
+            if (existing != nullptr)
+                seq.lengthBars = existing->lengthBars;
+            sendQuantize();
+            sendEngine (Command::Type::setMetronomeLevel, kNoPad, seq.metronomeLevel);
+            Command c;
+            c.type = Command::Type::seqRecStandby;
+            c.index = pad.index();
+            c.value = seq.lengthBars;
+            engine.post (c);
+            return;
+        }
+
+        if (! hasPattern (pad))
+            return;
+        lastPattern = pad;
+        const auto playing = playingPattern();
+        const auto tempo = controller.project().pattern (pad)->tempo;
+
+        if (holdHeld)
+        {
+            // HOLD + pad: wait for the external start (host transport / MIDI, p. 47).
+            Command c;
+            c.type = Command::Type::seqArm;
+            c.index = engine.sequencer().armedIndex() == pad.index() ? -1 : pad.index();
+            engine.post (c);
+            return;
+        }
+        Command c;
+        c.index = pad.index();
+        if (subHeld || ! playing.isValid())
+        {
+            // SUB PAD + pad switches at once (p. 15); otherwise start when stopped.
+            c.type = Command::Type::seqPlay;
+            controller.setPatternTempo (tempo);
+        }
+        else if (playing == pad)
+            c.type = Command::Type::seqStop;   // pressing the playing pad stops it
+        else
+            c.type = Command::Type::seqReserve;   // the next pattern starts at the end of this one
+        engine.post (c);
+    }
+
+    void PanelModel::pressPatternRec (double now)
+    {
+        switch (patRec)
+        {
+            case PatRec::none:
+                patRec = PatRec::choosePad;
+                return;
+            case PatRec::choosePad:
+                patRec = PatRec::none;
+                return;
+            case PatRec::standby:
+                sendEngine (Command::Type::seqRecStart);   // one bar of count-in, then record
+                patRec = PatRec::active;
+                return;
+            case PatRec::active:
+                sendEngine (Command::Type::seqRehearsal);  // rEH: play without recording
+                return;
+        }
+        juce::ignoreUnused (now);
+    }
+
+    void PanelModel::stopPatternRecording (bool commit)
+    {
+        if (patRec == PatRec::standby || patRec == PatRec::active)
+            sendEngine (commit ? Command::Type::seqRecStop : Command::Type::seqRecCancel);
+        if (patErase)
+            sendEngine (Command::Type::seqErase, kNoPad, 0.0);
+        patRec = PatRec::none;
+        patErase = false;
+        padsErasing.reset();
+    }
+
     void PanelModel::pressDel (double now)
     {
         if (cancelHeld && op.op == Op::none)
         {
             // CANCEL + DEL: delete all samples (or patterns) of a bank (p. 30, 34).
-            if (patternMode) { flash ("ENP", now); return; }   // patterns: Phase 5
             op = {};
             op.op = Op::delAll;
             return;
@@ -761,7 +888,22 @@ namespace spsx
         switch (op.op)
         {
             case Op::none:
-                if (patternMode) { flash ("ENP", now); return; }
+                if (patRec == PatRec::active)
+                {
+                    // DEL while recording: erase mode (ErS, p. 33). DEL again leaves it.
+                    patErase = ! patErase;
+                    sendEngine (Command::Type::seqErase, kNoPad, patErase ? 1.0 : 0.0);
+                    return;
+                }
+                if (patRec != PatRec::none)
+                    return;
+                if (patternMode)
+                {
+                    bool any = false;
+                    for (int p = 0; p < kPadsPerBank; ++p)
+                        any = any || hasPattern ({ bankIndex, p });
+                    if (! any) { flash ("ENP", now); return; }   // no patterns in this bank (p. 34)
+                }
                 op = {};
                 op.op = Op::del;
                 return;
@@ -774,7 +916,8 @@ namespace spsx
                     if (! op.selected.test ((size_t) i))
                         continue;
                     any = true;
-                    reportStatus (controller.deleteSample (PadId::fromIndex (i)), now);
+                    reportStatus (patternMode ? controller.deletePattern (PadId::fromIndex (i))
+                                              : controller.deleteSample (PadId::fromIndex (i)), now);
                 }
                 if (any)
                     busy (now);
@@ -798,10 +941,17 @@ namespace spsx
                 bool blocked = false;
                 for (int b = first; b <= last; ++b)
                 {
-                    if (bankProtected (b)) { blocked = true; continue; }
+                    if (op.op == Op::delAll && bankProtected (b)) { blocked = true; continue; }
                     for (int p = 0; p < kPadsPerBank; ++p)
-                        if (hasSample ({ b, p }))
+                    {
+                        // Format clears samples and patterns; delete all clears the mode's data.
+                        const bool samples = op.op == Op::format || ! patternMode;
+                        const bool patterns = op.op == Op::format || patternMode;
+                        if (samples && hasSample ({ b, p }) && ! controller.project().sampleBankProtected[(size_t) b])
                             controller.deleteSample ({ b, p });
+                        if (patterns && hasPattern ({ b, p }) && ! controller.project().patternBankProtected[(size_t) b])
+                            controller.deletePattern ({ b, p });
+                    }
                 }
                 if (blocked && op.op == Op::delAll)
                     flash ("Prt", now);
@@ -828,8 +978,10 @@ namespace spsx
             case Op::exchange:
                 if (op.stage == 2)
                 {
-                    const auto s = op.op == Op::copy ? controller.copySample (op.a, op.b)
-                                                     : controller.exchangeSamples (op.a, op.b);
+                    const auto s = patternMode ? (op.op == Op::copy ? controller.copyPattern (op.a, op.b)
+                                                                    : controller.exchangePatterns (op.a, op.b))
+                                               : (op.op == Op::copy ? controller.copySample (op.a, op.b)
+                                                                    : controller.exchangeSamples (op.a, op.b));
                     reportStatus (s, now);
                     busy (now);
                     endOp();
@@ -860,9 +1012,9 @@ namespace spsx
             }
 
             case Op::none:
-                if (patternMode)
+                if (patternMode || patRec != PatRec::none)
                 {
-                    flash ("---", now, 1.0);   // pattern recording arrives in Phase 5
+                    pressPatternRec (now);
                     return;
                 }
                 switch (resample)
@@ -968,8 +1120,13 @@ namespace spsx
             flash ("---", now, 0.5);
         }
 
-        if (op.op != Op::none)
+        const bool hadOp = op.op != Op::none;
+        if (hadOp)
             endOp();
+        if (patRec != PatRec::none)
+            stopPatternRecording (patRec == PatRec::active);   // CANCEL ends recording and keeps it (p. 33)
+        else if (! hadOp && sampling == Sampling::none && resample == Resample::none && playingPattern().isValid())
+            sendEngine (Command::Type::seqStop);                // CANCEL stops pattern playback (p. 15)
         if (sampling != Sampling::none)
             exitSampling (true);
         if (resample != Resample::none)
@@ -1066,8 +1223,8 @@ namespace spsx
 
         switch (pad)
         {
-            case 0: op.op = patternMode ? Op::none : Op::copy; break;
-            case 1: op.op = patternMode ? Op::none : Op::exchange; break;
+            case 0: op.op = Op::copy; break;
+            case 1: op.op = Op::exchange; break;
             case 2: op.op = patternMode ? Op::none : Op::import; break;
             case 3: op.op = Op::funcSetting; op.setting = FuncSetting::autoTrig;     op.value = dev.autoTrigLevel; break;
             case 4: op.op = Op::backupLoad; break;
@@ -1104,8 +1261,8 @@ namespace spsx
             case Op::exchange:
                 if (op.stage == 0)
                 {
-                    if (op.op == Op::copy && ! hasSample (pad))
-                        return;   // only pads with a sample are copy sources
+                    if (op.op == Op::copy && ! (patternMode ? hasPattern (pad) : hasSample (pad)))
+                        return;   // only pads with data are copy sources
                     op.a = pad;
                     op.stage = 1;
                 }
@@ -1126,6 +1283,16 @@ namespace spsx
 
             case Op::del:
                 if (bankProtected (pad.bank)) { flash ("Prt", now); return; }
+                if (patternMode)
+                {
+                    // Several patterns can be selected only within one bank (p. 34).
+                    for (int i = 0; i < kMaxPads; ++i)
+                        if (op.selected.test ((size_t) i) && PadId::fromIndex (i).bank != pad.bank)
+                            op.selected.reset ((size_t) i);
+                    if (hasPattern (pad))
+                        op.selected.flip ((size_t) pad.index());
+                    return;
+                }
                 if (hasSample (pad))
                     op.selected.flip ((size_t) pad.index());
                 return;
@@ -1295,6 +1462,7 @@ namespace spsx
                     if (k == Knob::ctrl3)
                     {
                         seq.metronomeLevel = (int) std::lround (v * 127.0);
+                        sendEngine (Command::Type::setMetronomeLevel, kNoPad, seq.metronomeLevel);
                         flash (DisplayText::number (seq.metronomeLevel), now);
                     }
                     return;
@@ -1350,6 +1518,13 @@ namespace spsx
                                                ? (double) tempo::fromIndex (knobToIndex (v, 127))
                                                : std::round ((40.0 + v * 160.0) * 10.0) / 10.0;
                         controller.setPatternTempo (bpm);
+                        // The playing (or last chosen) pattern keeps its tempo (p. 15).
+                        if (patRec == PatRec::none)
+                        {
+                            const auto target = playingPattern().isValid() ? playingPattern() : lastPattern;
+                            if (target.isValid())
+                                controller.setPatternTempoOf (target, bpm);
+                        }
                         if (sampling == Sampling::standby)
                             tempoSpecified = true;
                         flash (bpmDisplay (bpm), now);
@@ -1383,7 +1558,13 @@ namespace spsx
                 if (k == Knob::ctrl3)
                 {
                     const auto lengths = patternLengths();
-                    seq.lengthBars = lengths[(size_t) knobToIndex (v, (int) lengths.size())];
+                    int bars = lengths[(size_t) knobToIndex (v, (int) lengths.size())];
+                    // A pattern that already has notes cannot get shorter (p. 32).
+                    if (patRec != PatRec::none && patRecPad.isValid() && controller.project().pattern (patRecPad) != nullptr)
+                        bars = std::max (bars, controller.project().pattern (patRecPad)->lengthBars);
+                    seq.lengthBars = bars;
+                    if (patRec == PatRec::standby || patRec == PatRec::active)
+                        sendEngine (Command::Type::seqLength, kNoPad, bars);
                     flash (DisplayText::number (seq.lengthBars), now);
                 }
                 return;
@@ -1392,11 +1573,13 @@ namespace spsx
                 if (k == Knob::ctrl3)
                 {
                     seq.quantizeIndex = knobToIndex (v, 10);
+                    sendQuantize();   // takes effect immediately, also while recording (p. 33)
                     flash (quantizeNames()[(size_t) seq.quantizeIndex], now);
                 }
                 else if (k == Knob::ctrl2 && seq.quantizeIndex <= 1)
                 {
                     seq.shuffle = 50 + (int) std::lround (v * 25.0);   // range assumed (SPEC U13)
+                    sendQuantize();
                     flash (DisplayText::number (seq.shuffle), now);
                 }
                 return;
@@ -1438,6 +1621,15 @@ namespace spsx
             exitSampling (false);
         if (controller.isRecording() && sampling == Sampling::none && resample == Resample::none)
             busy (now);   // writing / loading the new sample: the dot blinks
+
+        // A finished pattern take: store it (the display dot blinks while it is written).
+        if (engine.sequencer().takeResult())
+        {
+            reportStatus (controller.commitRecordedPattern(), now);
+            busy (now);
+        }
+        if (engine.sequencer().recordingFull())
+            flash ("FUL", now, 1.0);
 
         // SLP: sleep after about five minutes without operation (p. 40).
         if (! sleeping && controller.project().device.illumination == 4 && now - lastActivity > kSleepSeconds)
@@ -1498,6 +1690,23 @@ namespace spsx
             case Edit::none:     break;
         }
 
+        if (patRec == PatRec::active)
+        {
+            const auto& sq = engine.sequencer();
+            if (patErase) return DisplayText::make ("ErS");
+            switch (sq.recordState())
+            {
+                case Sequencer::RecState::countIn:   return DisplayText::make (std::to_string (sq.measure()));   // -4 .. -1
+                case Sequencer::RecState::rehearsal: return DisplayText::make ("rEH");
+                case Sequencer::RecState::recording:
+                {
+                    // Measure and beat (p. 33): "12.3"
+                    const auto txt = std::to_string (std::min (99, sq.measure())) + "." + std::to_string (sq.beat());
+                    return DisplayText::make (txt.size() < 4 ? " " + txt : txt);
+                }
+                default: break;
+            }
+        }
         if (patternMode)
             return DisplayText::make ("Ptn");
         if (currentIsExt)
@@ -1624,6 +1833,27 @@ namespace spsx
             }
         }
 
+        // Pattern sequencer
+        {
+            const auto& sq = engine.sequencer();
+            const bool running = sq.playingIndex() >= 0 || patRec == PatRec::active || patRec == PatRec::standby;
+            v.illuminationTempo = running;     // the ring blinks with the pattern's tempo (p. 40)
+            v.tempo = engine.sequencerTempo();
+            if (op.op == Op::none)
+            {
+                switch (patRec)
+                {
+                    case PatRec::choosePad: led (Control::rec, Led::on); break;
+                    case PatRec::standby:   led (Control::rec, Led::blink); break;
+                    case PatRec::active:
+                        led (Control::rec, sq.recordState() == Sequencer::RecState::recording ? Led::on : Led::blink);
+                        if (patErase) led (Control::del, Led::on);
+                        break;
+                    case PatRec::none: break;
+                }
+            }
+        }
+
         // Pads
         const bool choosingRecordPad = sampling == Sampling::choosePad || resample == Resample::choosePad
                                        || resample == Resample::padChosen;
@@ -1641,18 +1871,33 @@ namespace spsx
                 l = (fx.targetAll || fx.targets.test ((size_t) p.index())) ? Led::on : Led::off;
             else if (op.op == Op::copy || op.op == Op::exchange)
             {
+                const bool hasData = patternMode ? hasPattern (p) : hasSample (p);
                 if (p == op.a || p == op.b)            l = Led::on;
-                else if (op.stage == 0 && (op.op == Op::exchange || hasSample (p))) l = Led::blink;
+                else if (op.stage == 0 && (op.op == Op::exchange || hasData)) l = Led::blink;
                 else if (op.stage == 1)                l = Led::blink;
             }
             else if (op.op == Op::import)
                 l = (op.stage == 1 && p == op.a) ? Led::on : (op.stage == 0 ? Led::blink : Led::off);
             else if (op.op == Op::del)
-                l = op.selected.test ((size_t) p.index()) ? Led::on : (hasSample (p) ? Led::blink : Led::off);
+                l = op.selected.test ((size_t) p.index()) ? Led::on
+                    : ((patternMode ? hasPattern (p) : hasSample (p)) ? Led::blink : Led::off);
             else if (op.op != Op::none)
                 l = Led::off;
+            else if (patRec == PatRec::choosePad)
+                // New pattern: empty pads blink; pads with a pattern can be overdubbed.
+                l = bankProtected (p.bank) ? Led::off : (hasPattern (p) ? Led::on : Led::blink);
+            else if (patRec == PatRec::standby)
+                l = p == patRecPad ? Led::on : Led::off;
+            else if (patRec == PatRec::active)
+                l = padsErasing.test ((size_t) i) ? Led::blinkFast : (isPlaying (p) ? Led::blink : (hasSample (p) ? Led::on : Led::off));
             else if (patternMode)
-                l = Led::off;   // pads with patterns blink once patterns exist (Phase 5)
+            {
+                // Pads with a pattern blink; the playing one is lit; reserved / armed blink fast.
+                const auto& sq = engine.sequencer();
+                if (sq.playingIndex() == p.index())                                   l = Led::on;
+                else if (sq.reservedIndex() == p.index() || sq.armedIndex() == p.index()) l = Led::blinkFast;
+                else if (hasPattern (p))                                              l = Led::blink;
+            }
             else if (isPlaying (p))
                 l = Led::blink;   // SPEC U1
             else if (hasSample (p))

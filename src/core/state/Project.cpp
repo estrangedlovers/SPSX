@@ -72,6 +72,7 @@ namespace spsx
     Project::Project (int banks)
         : numBanks (juce::jlimit (1, kMaxBanks, banks)),
           pads ((size_t) (numBanks * kPadsPerBank)),
+          patterns ((size_t) (numBanks * kPadsPerBank)),
           sampleBankProtected ((size_t) numBanks, false),
           patternBankProtected ((size_t) numBanks, false)
     {
@@ -99,6 +100,26 @@ namespace spsx
             padArray.add (o);
         }
         root->setProperty ("pads", padArray);
+
+        juce::Array<juce::var> patternArray;
+        for (int i = 0; i < (int) patterns.size(); ++i)
+        {
+            const auto& pat = patterns[(size_t) i];
+            if (pat == nullptr)
+                continue;
+            auto* o = new juce::DynamicObject();
+            const auto id = PadId::fromIndex (i);
+            o->setProperty ("bank", id.bank);
+            o->setProperty ("pad", id.pad);
+            o->setProperty ("bars", pat->lengthBars);
+            o->setProperty ("tempo", pat->tempo);
+            juce::Array<juce::var> ev;
+            for (const auto& e : pat->events)
+                ev.add (juce::Array<juce::var> { e.tick, e.length, (int) e.pad });
+            o->setProperty ("events", ev);
+            patternArray.add (o);
+        }
+        root->setProperty ("patterns", patternArray);
         root->setProperty ("sampleBankProtected", boolsToVar (sampleBankProtected));
         root->setProperty ("patternBankProtected", boolsToVar (patternBankProtected));
 
@@ -136,6 +157,35 @@ namespace spsx
                 auto& slot = p.slot (id);
                 slot.file = item.getProperty ("file", {}).toString();
                 slot.settings = settingsFromVar (item.getProperty ("settings", {}));
+            }
+        }
+
+        if (auto* arr = v.getProperty ("patterns", {}).getArray())
+        {
+            for (const auto& item : *arr)
+            {
+                const PadId id { (int) item.getProperty ("bank", -1), (int) item.getProperty ("pad", -1) };
+                if (! id.isValid() || id.bank >= p.numBanks)
+                    continue;
+                std::vector<SeqEvent> events;
+                if (auto* ev = item.getProperty ("events", {}).getArray())
+                {
+                    for (const auto& e : *ev)
+                    {
+                        auto* triple = e.getArray();
+                        if (triple == nullptr || triple->size() < 3) continue;
+                        SeqEvent se;
+                        se.tick = (int) (*triple)[0];
+                        se.length = juce::jmax (1, (int) (*triple)[1]);
+                        se.pad = (std::int16_t) juce::jlimit (0, kMaxPads - 1, (int) (*triple)[2]);
+                        events.push_back (se);
+                        if ((int) events.size() >= kMaxPatternEvents) break;
+                    }
+                }
+                const int bars = item.getProperty ("bars", 1);
+                for (auto& e : events)
+                    e.tick = juce::jlimit (0, juce::jlimit (1, 99, bars) * kTicksPerBar - 1, (int) e.tick);
+                p.pattern (id) = new PatternData (bars, (double) item.getProperty ("tempo", 120.0), std::move (events));
             }
         }
 

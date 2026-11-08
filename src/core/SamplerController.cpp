@@ -127,9 +127,16 @@ namespace spsx
             if (! proj.pads[(size_t) i].isEmpty())
                 engine.postSample (PadId::fromIndex (i), nullptr);
 
+        for (int i = 0; i < (int) proj.patterns.size(); ++i)
+            if (proj.patterns[(size_t) i] != nullptr)
+                engine.postPattern (i, nullptr);
+
         proj = std::move (p);
         for (int i = 0; i < (int) proj.pads.size(); ++i)
             pushPad (PadId::fromIndex (i));
+        for (int i = 0; i < (int) proj.patterns.size(); ++i)
+            if (proj.patterns[(size_t) i] != nullptr)
+                pushPattern (PadId::fromIndex (i));
         setPatternTempo (proj.patternTempo);
         setOutputGainDb (proj.device.outputGainDb);
     }
@@ -278,6 +285,76 @@ namespace spsx
         for (int i = 0; i < (int) proj.pads.size(); ++i)
             if (! proj.pads[(size_t) i].isEmpty() && proj.pads[(size_t) i].settings.timeModify == TimeModifyMode::pattern)
                 requestStretch (PadId::fromIndex (i));
+    }
+
+    // ---- patterns -----------------------------------------------------------------------
+
+    bool SamplerController::isPatternProtected (PadId pad) const
+    {
+        return pad.bank < (int) proj.patternBankProtected.size() && proj.patternBankProtected[(size_t) pad.bank];
+    }
+
+    bool SamplerController::hasPattern (PadId pad) const
+    {
+        return pad.isValid() && pad.bank < proj.numBanks && proj.pattern (pad) != nullptr;
+    }
+
+    void SamplerController::pushPattern (PadId pad)
+    {
+        engine.postPattern (pad.index(), proj.pattern (pad));
+    }
+
+    SamplerController::Status SamplerController::setPattern (PadId pad, PatternData::Ptr pattern)
+    {
+        if (! pad.isValid() || pad.bank >= proj.numBanks) return Status::invalid;
+        if (isPatternProtected (pad)) return Status::protectedBank;
+        proj.pattern (pad) = pattern;
+        pushPattern (pad);
+        return Status::ok;
+    }
+
+    SamplerController::Status SamplerController::deletePattern (PadId pad)
+    {
+        if (! hasPattern (pad)) return Status::emptyPad;
+        return setPattern (pad, nullptr);
+    }
+
+    SamplerController::Status SamplerController::copyPattern (PadId from, PadId to)
+    {
+        if (! hasPattern (from) || ! to.isValid() || to.bank >= proj.numBanks) return Status::emptyPad;
+        return setPattern (to, proj.pattern (from));   // immutable: sharing is a copy
+    }
+
+    SamplerController::Status SamplerController::exchangePatterns (PadId a, PadId b)
+    {
+        if (! a.isValid() || ! b.isValid() || a.bank >= proj.numBanks || b.bank >= proj.numBanks) return Status::invalid;
+        if (isPatternProtected (a) || isPatternProtected (b)) return Status::protectedBank;
+        std::swap (proj.pattern (a), proj.pattern (b));
+        pushPattern (a);
+        pushPattern (b);
+        return Status::ok;
+    }
+
+    SamplerController::Status SamplerController::commitRecordedPattern()
+    {
+        const auto& seq = engine.sequencer();
+        const int index = seq.resultIndex();
+        if (index < 0 || index >= kMaxPads) return Status::invalid;
+        const auto pad = PadId::fromIndex (index);
+        const int n = seq.resultCount();
+        if (n <= 0)
+            return proj.pattern (pad) != nullptr ? setPattern (pad, nullptr) : Status::emptyPad;   // everything erased
+        std::vector<SeqEvent> events (seq.resultEvents().begin(), seq.resultEvents().begin() + n);
+        for (auto& e : events) { e.pass = 0; e.id = 0; }
+        return setPattern (pad, new PatternData (seq.resultLengthBars(), proj.patternTempo, std::move (events)));
+    }
+
+    void SamplerController::setPatternTempoOf (PadId pad, double bpm)
+    {
+        if (! hasPattern (pad) || isPatternProtected (pad)) return;
+        const auto& old = *proj.pattern (pad);
+        if (juce::exactlyEqual (old.tempo, bpm)) return;
+        setPattern (pad, new PatternData (old.lengthBars, bpm, old.events));
     }
 
     void SamplerController::setOutputGainDb (int db)

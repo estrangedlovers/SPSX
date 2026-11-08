@@ -90,6 +90,21 @@ namespace spsx
             lastVolume = vol;
         }
 
+        // Host transport: in a DAW the sequencer follows the host's tempo and start/stop.
+        if (wrapperType != wrapperType_Standalone)
+        {
+            bool playing = false;
+            double bpm = 0.0, ppq = 0.0;
+            if (auto* ph = getPlayHead())
+                if (auto pos = ph->getPosition())
+                {
+                    playing = pos->getIsPlaying();
+                    if (auto b = pos->getBpm()) bpm = *b;
+                    if (auto q = pos->getPpqPosition()) ppq = *q;
+                }
+            engine.setHostTransport (bpm > 0.0, playing, bpm, ppq);
+        }
+
         const int numIn = getTotalNumInputChannels();
         const int numOut = getTotalNumOutputChannels();
         const int n = buffer.getNumSamples();

@@ -119,6 +119,7 @@ namespace spsx
         bool isExtOn() const noexcept { return extOn; }
         bool isSampling() const noexcept { return sampling != Sampling::none; }
         bool isResampling() const noexcept { return resample != Resample::none; }
+        bool isPatternRecording() const noexcept { return patRec != PatRec::none; }
         /** Effect index 0..28 that is (or would be) running, or -1. */
         int activeEffectIndex() const noexcept;
         const EffectState& effects() const noexcept { return fx; }
@@ -145,6 +146,9 @@ namespace spsx
         enum class Sampling { none, choosePad, standby, recording };
         /** Resample (p. 26): RESAMPLE -> REC -> choose pad -> REC (armed) -> pad starts it. */
         enum class Resample { none, active, choosePad, padChosen, armed, recording };
+        /** Pattern recording (p. 32): REC -> choose pattern pad -> standby (metronome)
+            -> REC (count-in, record; REC again = rehearsal) -> CANCEL commits. */
+        enum class PatRec { none, choosePad, standby, active };
 
         struct OpState
         {
@@ -183,6 +187,12 @@ namespace spsx
         void exitSampling (bool cancelRecording);
         void exitResample (bool cancelRecording);
         void startRecording (bool resampling, double now);
+        void pressPatternPad (PadId pad, double now);
+        void pressPatternRec (double now);
+        void stopPatternRecording (bool commit);
+        bool hasPattern (PadId p) const;
+        PadId playingPattern() const;
+        void sendQuantize();
 
         // engine sync
         void syncEffect();
@@ -263,6 +273,13 @@ namespace spsx
         PadId recordDest = kNoPad;
         bool tempoSpecified = false;
         double digitalLevelKnob = 0.8, resampleLevelKnob = 0.8;
+
+        // pattern recording
+        PatRec patRec = PatRec::none;
+        PadId patRecPad = kNoPad;
+        bool patErase = false;
+        std::bitset<12> padsErasing;
+        PadId lastPattern = kNoPad;     // most recently selected pattern (TIME/BPM target)
 
         // last state sent to the engine
         int sentEffect = -2;

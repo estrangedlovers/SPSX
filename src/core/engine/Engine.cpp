@@ -10,6 +10,7 @@ namespace spsx
     {
         for (auto& p : positions)
             p.store (-1);
+        seq.setPatternTable (patternTable.data());
         // Queues exist before prepare() so the message thread can post state at any time.
         uiQueue.resize ((size_t) kFifoSize);
         timed.resize ((size_t) kTimedSize);
@@ -24,17 +25,23 @@ namespace spsx
             if (ps.sample != nullptr)    ps.sample->decReferenceCount();
             if (ps.stretched != nullptr) ps.stretched->decReferenceCount();
         }
+        for (auto* p : patternTable)
+            if (p != nullptr) p->decReferenceCount();
         for (int i = 0; i < numRetired; ++i)
             retired[(size_t) i]->decReferenceCount();
 
-        Command c;
         int start1, size1, start2, size2;
         uiFifo.prepareToRead (uiFifo.getNumReady(), start1, size1, start2, size2);
         auto drop = [this] (int s, int n)
         {
             for (int i = 0; i < n; ++i)
-                if (auto* smp = uiQueue[(size_t) (s + i)].sample)
-                    smp->decReferenceCount();
+            {
+                const auto& c = uiQueue[(size_t) (s + i)];
+                if (c.sample != nullptr)
+                    c.sample->decReferenceCount();
+                if (c.type == Command::Type::seqSetPattern && c.ptr != nullptr)
+                    static_cast<PatternData*> (c.ptr)->decReferenceCount();
+            }
         };
         if (! uiQueue.empty())
         {
@@ -52,6 +59,7 @@ namespace spsx
         voices.setBudget (limits.channelVoices);
         clip = limits.clipOutput;
         effects.prepare (rate, maxBlock, limits.effectSlots);
+        seq.prepare (rate);
         extRamp = (float) (1.0 / (0.005 * rate));
         recPhase = RecPhase::idle;
         tap = nullptr;
@@ -121,6 +129,33 @@ namespace spsx
         return post (c);
     }
 
+    bool Engine::postPattern (int index, PatternData::Ptr pattern)
+    {
+        Command c;
+        c.type = Command::Type::seqSetPattern;
+        c.index = index;
+        auto* raw = pattern.get();
+        if (raw != nullptr)
+            raw->incReferenceCount();   // reference travels with the command
+        c.ptr = raw;
+        if (! post (c))
+        {
+            if (raw != nullptr)
+                raw->decReferenceCount();
+            return false;
+        }
+        return true;
+    }
+
+    void Engine::setHostTransport (bool follow, bool playing, double bpm, double ppq) noexcept
+    {
+        hostFollow = follow;
+        hostPlaying = playing;
+        hostTempo = bpm;
+        hostPpq = ppq;
+        seq.setHostTransport (follow, playing, ppq);
+    }
+
     void Engine::collectGarbage()
     {
         int start1, size1, start2, size2;
@@ -177,6 +212,34 @@ namespace spsx
             uiFifo.finishedRead (size1 + size2);
         }
 
+        // Pattern sequencer: schedule this block's pad hits, note-offs and clicks at their
+        // exact samples (they are executed by the segment loop below).
+        // Tempo: the host's when following it; otherwise a playing pattern runs at its own
+        // stored tempo (p. 15). Recording uses the tempo set in standby.
+        if (hostFollow && hostTempo > 0.0)
+            patternTempo = hostTempo;
+        else if (seq.recordState() == Sequencer::RecState::off && seq.playingIndex() >= 0)
+            if (const auto* p = patternTable[(size_t) seq.playingIndex()])
+                patternTempo = p->tempo;
+        seqTempoFlag.store (patternTempo, std::memory_order_relaxed);
+        seq.process (time, n, patternTempo, [this] (const Sequencer::Event& e)
+        {
+            Command c;
+            c.time = e.time;
+            if (e.kind == Sequencer::Event::Kind::click)
+            {
+                c.type = Command::Type::click;
+                c.value = e.accent ? 1.0 : 0.0;
+            }
+            else
+            {
+                c.type = e.kind == Sequencer::Event::Kind::padDown ? Command::Type::padDown : Command::Type::padUp;
+                c.pad = PadId::fromIndex (e.pad);
+                c.index = 1;   // from the sequencer: never recorded back
+            }
+            schedule (c);
+        });
+
         updateEffectTempo();
 
         // Timed commands split the block so they land on their exact sample.
@@ -215,6 +278,13 @@ namespace spsx
         // Synced effects follow "the tempo of the longest sample of the samples to which
         // the effect is being applied", or the pattern tempo (p. 44 *1). Pattern playback
         // arrives in Phase 5; until then the pattern tempo is the fallback.
+        // "If a pattern is playing, the tempo of the pattern is used as the reference."
+        if (seq.playingIndex() >= 0 || seq.recordState() != Sequencer::RecState::off)
+        {
+            fxTempo = patternTempo;
+            effectTempoFlag.store (fxTempo, std::memory_order_relaxed);
+            return;
+        }
         SampleIndex longest = 0;
         double bpm = 0.0;
         for (int i = 0; i < kMaxPads; ++i)
@@ -456,10 +526,26 @@ namespace spsx
 
         switch (c.type)
         {
-            case T::padDown:   if (c.pad.isValid()) padDown (c.pad, false); break;
-            case T::padUp:     if (c.pad.isValid()) padUp (c.pad, false); break;
-            case T::subDown:   if (lastStruck.isValid()) padDown (lastStruck, true); break;
-            case T::subUp:     if (lastStruck.isValid()) padUp (lastStruck, true); break;
+            case T::padDown:
+                if (! c.pad.isValid()) break;
+                padDown (c.pad, false);
+                if (c.index != 1) seq.padDown (c.pad.index(), time);
+                break;
+            case T::padUp:
+                if (! c.pad.isValid()) break;
+                padUp (c.pad, false);
+                if (c.index != 1) seq.padUp (c.pad.index(), time);
+                break;
+            case T::subDown:
+                if (! lastStruck.isValid()) break;
+                padDown (lastStruck, true);
+                seq.padDown (lastStruck.index(), time);
+                break;
+            case T::subUp:
+                if (! lastStruck.isValid()) break;
+                padUp (lastStruck, true);
+                seq.padUp (lastStruck.index(), time);
+                break;
 
             case T::holdDown:
                 for (auto& v : voices)
@@ -575,6 +661,38 @@ namespace spsx
                 if (tap != nullptr) detachTap (RecPhase::idle);
                 recPhase = RecPhase::idle;
                 break;
+
+            // ---- pattern sequencer ----
+            case T::seqSetPattern:
+            {
+                auto* incoming = static_cast<PatternData*> (c.ptr);
+                if (c.index < 0 || c.index >= kMaxPads) { retire (incoming); break; }
+                auto*& slot = patternTable[(size_t) c.index];
+                retire (slot);           // the sequencer reads the table each block; nothing else holds it
+                slot = incoming;
+                if (slot == nullptr && seq.playingIndex() == c.index)
+                    seq.stop();
+                break;
+            }
+            case T::seqPlay:       seq.play (c.index); break;
+            case T::seqReserve:    seq.reserve (c.index); break;
+            case T::seqStop:       seq.stop(); break;
+            case T::seqArm:        seq.arm (c.index); break;
+            case T::seqRecStandby:
+                seq.recordStandby (c.index, (int) c.value,
+                                   c.index >= 0 && c.index < kMaxPads ? patternTable[(size_t) c.index] : nullptr);
+                break;
+            case T::seqRecStart:   seq.recordStart(); break;
+            case T::seqRehearsal:  seq.toggleRehearsal(); break;
+            case T::seqRecStop:    seq.recordStop(); break;
+            case T::seqRecCancel:  seq.recordCancel(); break;
+            case T::seqLength:     seq.setLength ((int) c.value); break;
+            case T::seqQuantize:   seq.setQuantize (c.index, (int) c.value); break;
+            case T::seqErase:      seq.setEraseMode (c.value > 0.5); break;
+            case T::seqErasePad:   if (c.pad.isValid()) seq.setErasePad (c.pad.index(), c.value > 0.5); break;
+            case T::seqEraseAll:   seq.setEraseAll (c.value > 0.5); break;
+            case T::setMetronomeLevel: metronomeLevel = (float) (std::clamp (c.value, 0.0, 127.0) / 127.0); break;
+            case T::click:         click.trigger (c.value > 0.5, rate, metronomeLevel); break;
         }
     }
 
@@ -651,7 +769,7 @@ namespace spsx
         return src;
     }
 
-    void Engine::retire (SampleData* s) noexcept
+    void Engine::retire (juce::ReferenceCountedObject* s) noexcept
     {
         if (s == nullptr)
             return;
@@ -659,7 +777,7 @@ namespace spsx
         if (numRetired == kRetireSize)
         {
             // Out of room: force the oldest out, cutting any voice still reading it.
-            SampleData* oldest = retired[0];
+            auto* oldest = retired[0];
             for (auto& v : voices)
                 if (v.sampleInUse() == oldest || v.stretchedInUse() == oldest)
                     v.kill();
@@ -674,7 +792,7 @@ namespace spsx
         int keep = 0;
         for (int i = 0; i < numRetired; ++i)
         {
-            SampleData* s = retired[(size_t) i];
+            auto* s = retired[(size_t) i];
             bool inUse = false;
             for (auto& v : voices)
                 if (v.sampleInUse() == s || v.stretchedInUse() == s)
