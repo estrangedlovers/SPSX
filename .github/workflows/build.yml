@@ -68,7 +68,7 @@ jobs:
 
       - name: pluginval (strictness 10)
         run: |
-          curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
           PV=pluginval.app/Contents/MacOS/pluginval
           $PV --strictness-level 10 --verbose --validate-in-process --output-dir pluginval-logs ~/Library/Audio/Plug-Ins/VST3/SPSX.vst3
