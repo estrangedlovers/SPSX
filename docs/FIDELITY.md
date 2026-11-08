@@ -38,11 +38,11 @@ Undocumented control-behaviour questions are listed as U1..U22 in `SPEC.md` sect
 
 | Effect | Documented | Method chosen | Confidence |
 |---|---|---|---|
-| FILTER+DRIVE | LPF with overdrive; cutoff, resonance★, drive★ | 2-pole ZDF (TPT) SVF low-pass, tanh drive stage before the filter, 4x oversampled | Medium |
-| VOICE TRANS | Formant, effect level, direct level | Real-time formant shift via LPC envelope + pitch-synchronous resynthesis (TD-PSOLA). Original likely also shifts pitch; unknown. | Low |
-| DELAY | Note-synced time *1, feedback★, balance; max ~2 s | Stereo digital delay, interpolated read, LPF in loop (gentle) | Medium |
-| ISOLATOR | Low★/Mid★/High★ isolate/remove | 3-band Linkwitz-Riley crossover (LR4), each band -inf..+6 dB, centre = unity | Medium |
-| DJFX LOOPER | Length★, speed -1..1, loop switch | Capture buffer, variable-rate read (cubic interpolation), speed slew to mimic turntable inertia | Medium |
+| FILTER+DRIVE | LPF with overdrive; cutoff, resonance★, drive★ | Implemented: 4x oversampled tanh drive (0..36 dB, Limit 18) into a ZDF SVF low-pass 40 Hz..18 kHz, Q 0.5..18 (Limit 4), per-sample smoothed cutoff. | Medium |
+| VOICE TRANS | Formant, effect level, direct level | Implemented: YIN pitch tracker (4x decimated, every 256 samples) drives pitch-synchronous overlap-add; each grain reads the input at the FORMANT ratio (0.5..2), so formants scale while pitch stays. ~15 ms latency. Whether the hardware also shifts pitch is unknown. | Low |
+| DELAY | Note-synced time *1, feedback★, balance; max ~2 s | Implemented: stereo, Hermite reads, 40 ms tap cross-fade on time changes (no pitch bend), 9 kHz LPF + 40 Hz HPF and soft saturation in the loop. Feedback 0..0.98 (Limit 0.7). | Medium |
+| ISOLATOR | Low★/Mid★/High★ isolate/remove | Implemented: LR4 split at 300 Hz / 3 kHz with complementary mid (bands sum exactly to the input), each band kill..+6 dB (Limit +3 dB). | Medium |
+| DJFX LOOPER | Length★, speed -1..1, loop switch | Implemented: 2.2 s capture, loop 15 ms..1 s (Limit 60 ms min), speed glides with ~120 ms platter inertia, silent at stop, edge fades. | Medium |
 
 ## MFX
 
@@ -73,9 +73,30 @@ Undocumented control-behaviour questions are listed as U1..U22 in `SPEC.md` sect
 | 23 | SUBSONIC | pitch, threshold, balance | Envelope follower gates a sine oscillator (20..120 Hz) | Medium |
 | 24 | BPM LOOPER | length★, timing, loop switch | Tempo-synced capture loop; auto-retrigger every N 8ths | Medium |
 
-Parameter ranges for all effects: undocumented (SPEC U15). Display assumed 0..127.
+Parameter ranges for all effects: undocumented (SPEC U15). Display 0..127 except note values, P01..P16, -1.0..1.0, oFF/on, oFF/1..8 and semitones.
 
-Effect Limit: which parameters are limited is documented (17 effects, starred). How much is limited is not (U7). Starting point: limited parameters capped at 75% of travel, plus a soft limiter at -1 dBFS on any feedback loop output.
+### Effect implementation notes (Phase 3)
+
+- All nonlinear stages (FILTER+DRIVE, DISTORTION, OVERDRIVE, FUZZ) run 4x oversampled (JUCE polyphase IIR half-band). BIT CRASH and LO-FI keep their aliasing on purpose.
+- REVERB: 8-line FDN, Householder mixing, per-line damping, two modulated lines, four Schroeder diffusers, 12 ms pre-delay, RT60 0.3..12 s.
+- TAPE ECHO: 60..600 ms with a slow time smoother (moving RATE bends pitch like a tape motor), 0.7 Hz wow + 6.3 Hz flutter, saturating feedback that can exceed unity (Limit 0.75).
+- OCTAVE, CHROMATIC PS, PITCH: low-latency two-tap delay-line pitch shifters (45..70 ms windows); octave voices low-passed.
+- SLICER+FLG: the manual's 16 patterns (32 steps per cycle), cycle = RATE note value, 1.5 ms gate ramps, flanger depth/regeneration from CTRL 3.
+- BPM LOOPER: note-value loop length; TIMING N re-captures every N eighth notes (SPEC U8).
+- COMP: stereo-linked log-domain detector, soft knee 6 dB, SUSTAIN sets threshold (-6..-48 dB) and ratio (2..12) together, partial automatic make-up.
+- Tests (tests/TestEffects.cpp): every effect at 27 knob combinations x Limit on/off stays finite, denormal-free and bounded; silence in -> silence out (except NOISE GEN, VINYL SIM, RADIO TUNING); DELAY lands on the synced note value within 2 samples; no allocation while processing.
+
+### Sampling and resampling (Phase 4)
+
+| Block | Documented | Implemented | Confidence |
+|---|---|---|---|
+| Recording format | 16-bit linear, 44.1 kHz WAV/AIFF (p. 49) | Authentic: 16-bit integers written bit-exact (no dither). Extended: 32-bit float WAV (24-bit for AIFF). Streamed to disk through a 10 s lock-free FIFO and a writer thread. | High |
+| Count-in | One bar, -1- .. -4- (p. 26) | Clicks at the pattern tempo (accented first beat), sample-accurate start | High |
+| Auto sampling | 10 levels (p. 25) | -54..-6 dBFS (SPEC U35) | Low |
+| PEAK / red illumination | p. 19 | -6 dBFS / digital clip (SPEC U36, U37) | Low |
+| Resample polyphony | 4 mono / 2 stereo (p. 26) | Voice budget switched while RESAMPLE is lit | High |
+
+Effect Limit: which parameters are limited is documented (17 effects, starred, verified by a test). How much is limited is not (U7). Implemented per parameter (lower feedback ceilings, less resonance, less drive, smaller boosts, minimum loop lengths, bit depth >= 4), plus a soft limiter (knee at 0.8, ceiling 1.0) on the effect output. A test drives eight hot effects at maximum with Limit on and requires output <= 1.0.
 
 Effect switching: "seamless" (p. 2). Implementation: 20 ms equal-power crossfade between old and new effect instances, with tails of the old effect allowed to ring out in Extended mode **[Authentic: unknown whether tails continue]**.
 

@@ -5,6 +5,92 @@
 
 namespace spsx
 {
+    /** Drains a RecordTap to disk on its own thread. 16-bit output is written as
+        integers (bit-exact, no dither); 32-bit output as float. */
+    class SamplerController::RecordingSession final : private juce::Thread
+    {
+    public:
+        RecordingSession (const juce::File& f, int channels, bool aiff, int bits)
+            : juce::Thread ("SPSX recorder"), file (f), tap (channels, (int) (kEngineRate * 10.0)), bitDepth (bits)
+        {
+            file.getParentDirectory().createDirectory();
+            file.deleteFile();
+            std::unique_ptr<juce::AudioFormat> format;
+            if (aiff) format = std::make_unique<juce::AiffAudioFormat>();
+            else      format = std::make_unique<juce::WavAudioFormat>();
+            std::unique_ptr<juce::OutputStream> os (file.createOutputStream().release());
+            if (os != nullptr)
+                writer = format->createWriterFor (os, juce::AudioFormatWriterOptions{}
+                                                          .withSampleRate (kEngineRate)
+                                                          .withNumChannels (channels)
+                                                          .withBitsPerSample (bits)
+                                                          .withSampleFormat (bits == 32 ? juce::AudioFormatWriterOptions::SampleFormat::floatingPoint
+                                                                                        : juce::AudioFormatWriterOptions::SampleFormat::integral));
+            if (writer != nullptr)
+                startThread (juce::Thread::Priority::high);
+        }
+
+        ~RecordingSession() override { finish(); }
+
+        bool isOk() const noexcept { return writer != nullptr; }
+        RecordTap& getTap() noexcept { return tap; }
+        const juce::File& getFile() const noexcept { return file; }
+
+        /** Stops after writing everything already in the FIFO, then closes the file. */
+        void finish()
+        {
+            done.store (true);
+            stopThread (10000);
+            writer.reset();
+        }
+
+    private:
+        void run() override
+        {
+            constexpr int chunk = 4096;
+            std::vector<float> l ((size_t) chunk), r ((size_t) chunk);
+            std::vector<int> il ((size_t) chunk), ir ((size_t) chunk);
+            while (true)
+            {
+                const int n = tap.read (l.data(), r.data(), chunk);
+                if (n > 0)
+                    write (l.data(), r.data(), il.data(), ir.data(), n);
+                else if (done.load())
+                    break;
+                else
+                    wait (5);
+            }
+        }
+
+        void write (const float* l, const float* r, int* il, int* ir, int n)
+        {
+            if (bitDepth == 32)
+            {
+                const float* ch[2] = { l, r };
+                writer->writeFromFloatArrays (ch, tap.numChannels(), n);
+                return;
+            }
+            const float scale = bitDepth >= 24 ? 8388608.0f : 32768.0f;
+            const int shift = bitDepth >= 24 ? 8 : 16;
+            const int maxCode = (int) scale - 1;
+            auto convert = [&] (const float* x, int* out)
+            {
+                for (int i = 0; i < n; ++i)
+                    out[i] = (int) ((unsigned int) juce::jlimit (-(int) scale, maxCode, (int) std::lrint (x[i] * scale)) << shift);
+            };
+            convert (l, il);
+            convert (r, ir);
+            const int* ch[3] = { il, ir, nullptr };
+            writer->write (ch, n);
+        }
+
+        juce::File file;
+        RecordTap tap;
+        int bitDepth;
+        std::unique_ptr<juce::AudioFormatWriter> writer;
+        std::atomic<bool> done { false };
+    };
+
     SamplerController::SamplerController (Engine& e, const Limits& l)
         : engine (e), lim (l), proj (l.banks), stretchGeneration ((size_t) kMaxPads, 0)
     {
@@ -12,6 +98,13 @@ namespace spsx
 
     SamplerController::~SamplerController()
     {
+        if (session != nullptr && engine.isTapAttached())
+        {
+            // The audio thread may still write into the tap; only possible when the
+            // engine is being torn down with us, after audio stopped.
+            jassertfalse;
+        }
+        session.reset();
         pool.removeAllJobs (true, 10000);
     }
 
@@ -232,8 +325,119 @@ namespace spsx
         });
     }
 
+    // ---- recording ----------------------------------------------------------------------
+
+    SamplerController::Status SamplerController::beginRecording (const RecordOptions& o)
+    {
+        if (session != nullptr || loadingRecording) return Status::invalid;
+        if (! o.destination.isValid() || o.destination.bank >= proj.numBanks) return Status::invalid;
+        if (isProtected (o.destination)) return Status::protectedBank;
+        if (! proj.slot (o.destination).isEmpty()) return Status::occupied;
+
+        recordingsDir.createDirectory();
+        if (recordingsDir.getBytesFreeOnVolume() < 10 * 1024 * 1024)
+            return Status::full;
+
+        const bool aiff = proj.device.aiffFiles;
+        const auto name = juce::String::formatted ("SPSX_%c%02d_", (char) ('A' + o.destination.bank), o.destination.pad + 1)
+                          + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S") + (aiff ? ".aif" : ".wav");
+        const auto file = recordingsDir.getNonexistentChildFile (name.upToLastOccurrenceOf (".", false, false),
+                                                                 aiff ? ".aif" : ".wav", false);
+        // Authentic: 16-bit like the hardware. Extended: 32-bit float.
+        auto s = std::make_unique<RecordingSession> (file, o.stereo ? 2 : 1, aiff, lim.requantize16 ? 16 : (aiff ? 24 : 32));
+        if (! s->isOk())
+            return Status::invalid;
+
+        Command c;
+        c.type = Command::Type::recArm;
+        c.ptr = &s->getTap();
+        c.index = o.resample ? 1 : 0;
+        c.value = o.tempo;
+        c.params = { o.autoTriggerGain, (float) o.countInBeats, o.waitForStart ? 1.0f : 0.0f, 0.0f };
+        if (! engine.post (c))
+            return Status::invalid;
+
+        session = std::move (s);
+        recordOptions = o;
+        sessionAttachedOnce = false;
+        stopRequested = cancelRequested = false;
+        return Status::ok;
+    }
+
+    void SamplerController::startArmedRecording()
+    {
+        Command c;
+        c.type = Command::Type::recStart;
+        engine.post (c);
+    }
+
+    void SamplerController::stopRecording()
+    {
+        if (session == nullptr) return;
+        stopRequested = true;
+        Command c;
+        c.type = Command::Type::recStop;
+        engine.post (c);
+    }
+
+    void SamplerController::cancelRecording()
+    {
+        if (session == nullptr) return;
+        cancelRequested = true;
+        Command c;
+        c.type = Command::Type::recCancel;
+        engine.post (c);
+    }
+
+    void SamplerController::finishRecording (bool keep)
+    {
+        session->finish();
+        const auto file = session->getFile();
+        const auto frames = session->getTap().framesWritten.load();
+        session.reset();
+
+        if (! keep || frames <= 0)
+        {
+            file.deleteFile();
+            if (onRecordingFinished) onRecordingFinished (keep ? Status::emptyPad : Status::ok);
+            return;
+        }
+
+        loadingRecording = true;
+        const auto o = recordOptions;
+        loadFileAsync (o.destination, file, [this, o] (Status st)
+        {
+            loadingRecording = false;
+            if (st == Status::ok && o.snapToTempo && o.tempo > 0.0)
+            {
+                // "the end point will be automatically set to a beat of the BPM value you
+                // specified" (p. 26).
+                editSettings (o.destination, [&] (PadSettings& s)
+                {
+                    const double beat = 60.0 / o.tempo * kEngineRate;
+                    const auto len = proj.slot (o.destination).sample->length();
+                    const double beats = std::max (1.0, std::round ((double) len / beat));
+                    s.end = std::min<SampleIndex> (len, (SampleIndex) std::llround (beats * beat));
+                    s.bpm = o.tempo;
+                });
+            }
+            if (onRecordingFinished) onRecordingFinished (st);
+        });
+    }
+
     void SamplerController::tick()
     {
+        if (session != nullptr)
+        {
+            const bool attached = engine.isTapAttached();
+            sessionAttachedOnce = sessionAttachedOnce || attached;
+            const bool engineReleased = sessionAttachedOnce && ! attached;
+            if (engineReleased)
+                finishRecording (! cancelRequested);
+            else if (! sessionAttachedOnce && (stopRequested || cancelRequested))
+                finishRecording (false);   // stopped before the engine picked it up
+        }
+
         engine.collectGarbage();
 
         std::vector<Finished> ready;

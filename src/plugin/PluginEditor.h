@@ -48,6 +48,7 @@ namespace spsx
         ui::KeyMap keyMap = ui::KeyMap::defaults();
 
         juce::TextButton authenticButton { "Authentic" }, extendedButton { "Extended" }, keysButton { "Keys  ?" };
+        juce::TextButton fxModeButton { "FX Mode" };
         juce::Label status;
 
         std::set<int> keysDown;

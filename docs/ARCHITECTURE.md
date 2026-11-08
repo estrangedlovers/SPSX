@@ -80,6 +80,25 @@ The **PanelModel** is the central idea. It is a pure state machine that receives
 - The processor owns the `PanelModel`, so panel state survives closing the plugin window. Its 30 Hz timer calls `tick`.
 - `tools/snapshot` (`panel_snapshot`) renders the panel to PNG without a display, for review and docs.
 
+### Effects (Phase 3)
+
+- `core/fx/`: `Effect` (interface), `EffectInfo` (the 29 effects: names, display codes, value formats, Effect Limit stars, note values, Slicer patterns: one table shared by the panel display and the DSP), `DspUtil` (ZDF SVF, biquads, LR4, delay line, LFO, envelope follower, pitch shifter, smoothers), five effect families, `EffectHost`.
+- `EffectHost` creates and prepares all 29 effects per slot up front (nothing is allocated when switching), cross-fades switches over 25 ms, processes in chunks of at most 32 samples (block-rate parameters refresh often), and adds a soft limiter when Effect Limit is on. `prepare()` keeps the selection and parameters when a host re-prepares.
+- Routing: each voice renders into a dry bus or the effect bus depending on whether its pad is an effect target, gliding over 5 ms when the target changes. The panel decides the target set (current pad, REMAIN pads, all, EXT SOURCE) and sends it as commands. Synced effects take the BPM of the longest targeted sample, else the pattern tempo.
+
+### Input, sampling, resampling (Phase 4)
+
+```
+input -> INPUT GAIN (LINE, stereo) | MIC LEVEL (MIC, mono) -> PEAK
+      -> EXT SOURCE (level, stereo/mono) -> dry or effect bus
+      -> sampling monitor x digital level -> effect bus
+effect bus -> EffectHost -> + dry -> OUTPUT GAIN -> clip -> VOLUME (+ count-in click)
+recorder <- effect bus (sampling) or (dry + effect) x level (resample)
+```
+
+- The recorder is a state machine on the audio thread (waiting for start, waiting for trigger, count-in, recording, full) writing into a `RecordTap` (lock-free FIFO, 10 s). `SamplerController::RecordingSession` owns the tap and a writer thread that drains it to the file. The engine signals with an atomic when it has let go of the tap; only then does the session close the file, and the new sample is loaded on the worker pool and assigned to the pad.
+- Resample arms with "wait for start"; the panel posts the source pad's `padDown` and `recStart` together, so playback and recording begin on the same sample.
+
 ## 3. Authentic vs Extended
 
 A single `Limits` struct is read by engine and model code:

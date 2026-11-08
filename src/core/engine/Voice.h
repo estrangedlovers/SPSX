@@ -33,9 +33,12 @@ namespace spsx
         /** Immediate stop, used only when every voice object is busy. */
         void kill() noexcept { state = State::idle; }
 
-        /** Adds n samples into the stereo bus. Reads settings live so LEVEL, LOOP and
-            region edits apply to sounding voices. */
-        void render (float* busL, float* busR, int n, const PadSettings& s, const Source& src) noexcept;
+        /** Adds n samples into the dry and effect buses. Reads settings live so LEVEL,
+            LOOP and region edits apply to sounding voices. `toEffect` says whether this
+            pad is an effect target; the voice glides between buses over ~5 ms so
+            changing targets never clicks. */
+        void render (float* dryL, float* dryR, float* fxL, float* fxR, int n,
+                     const PadSettings& s, const Source& src, bool toEffect) noexcept;
 
         State  getState() const noexcept   { return state; }
         bool   isActive() const noexcept   { return state != State::idle; }
@@ -72,6 +75,8 @@ namespace spsx
         std::int64_t started = 0;
 
         float gain = 1.0f;            // smoothed LEVEL gain
+        float send = 0.0f;            // 0 = dry bus, 1 = effect bus (smoothed)
+        float sendStep = 0.005f;
         float releaseGain = 1.0f;
         float releaseStep = 0.0f;
         bool  lofiWasOn = false;

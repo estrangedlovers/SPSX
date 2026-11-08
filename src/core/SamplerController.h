@@ -3,6 +3,7 @@
 #include "engine/Engine.h"
 #include "state/Project.h"
 #include "sampler/SampleEdit.h"
+#include "engine/RecordTap.h"
 #include <juce_core/juce_core.h>
 #include <functional>
 #include <mutex>
@@ -47,12 +48,43 @@ namespace spsx
         void setOutputGainDb (int db);
         void setVolume (double knob01);
 
+        // ---- recording (sampling and resampling, Phase 4) -------------------------------
+        struct RecordOptions
+        {
+            PadId destination = kNoPad;
+            bool stereo = true;
+            bool resample = false;              // false: input through the effect, true: the mix
+            float autoTriggerGain = 0.0f;       // 0 = off, else start when input reaches it
+            int countInBeats = 0;               // 4 = one bar of clicks before recording
+            double tempo = 120.0;
+            bool waitForStart = false;          // resample: armed until a pad starts it
+            bool snapToTempo = false;           // a BPM was given in standby: end on a beat
+        };
+
+        /** Creates the file and writer thread and arms the engine. */
+        Status beginRecording (const RecordOptions& options);
+        /** Starts a wait-for-start recording (resample) in the same block as a pad hit. */
+        void startArmedRecording();
+        void stopRecording();
+        void cancelRecording();
+        /** True from beginRecording until the new sample has been written and loaded. */
+        bool isRecording() const noexcept { return session != nullptr || loadingRecording; }
+        PadId recordingDestination() const noexcept { return recordOptions.destination; }
+        /** Called on the message thread when a recording landed on its pad (or failed). */
+        std::function<void (Status)> onRecordingFinished;
+
+        void setRecordingsDirectory (const juce::File& dir) { recordingsDir = dir; }
+        juce::File getRecordingsDirectory() const { return recordingsDir; }
+
         /** Message-thread housekeeping: frees retired audio, applies finished jobs. */
         void tick();
         /** Blocks until background jobs finish, then applies them (tests, shutdown). */
         void waitForJobs();
 
     private:
+        class RecordingSession;
+        void finishRecording (bool keep);
+
         bool isProtected (PadId pad) const;
         void pushPad (PadId pad);
         void requestStretch (PadId pad);
@@ -76,5 +108,11 @@ namespace spsx
         std::mutex finishedLock;
         std::vector<Finished> finished;
         std::vector<std::uint64_t> stretchGeneration;   // per pad, discards stale renders
+
+        std::unique_ptr<RecordingSession> session;
+        RecordOptions recordOptions;
+        bool sessionAttachedOnce = false, stopRequested = false, cancelRequested = false, loadingRecording = false;
+        juce::File recordingsDir = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+                                       .getChildFile ("SPSX").getChildFile ("Recordings");
     };
 }

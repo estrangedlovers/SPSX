@@ -718,4 +718,13 @@ Implications: no MIDI out of any kind; no CC; Note Off is not recognized (U6); A
 | U31 | MFX button: toggle on press or release? | On release, and only when MFX was not used as a modifier (MFX + pad / CTRL 3) in between, so selecting a type never toggles the effect **[assumed]** |
 | U32 | HOLD and SUB PAD LEDs | Lit while pressed **[assumed]** |
 | U33 | Display during PAUSE | Unchanged **[assumed]** |
-| U34 | Effect knob values when switching effects | Each effect remembers its own CTRL 1..3 values; the physical knob position is only the last value turned **[assumed]** |
+| U34 | Effect knob values when switching effects | The CTRL knobs are absolute pots: a newly selected effect takes the knobs' current positions, unless REMAIN + knobs pre-set values (p. 13). While sampling or resampling, CTRL 3 is the level and the effect keeps its own CTRL 3 value **[assumed]** |
+| U35 | AUTO TRIG LEVEL in dB | Levels 1..9 = -54..-6 dBFS in 6 dB steps, measured at the PEAK point (after INPUT GAIN / MIC LEVEL) **[assumed]** |
+| U36 | PEAK threshold | -6 dBFS with a 100 ms hold **[assumed]** |
+| U37 | CTRL 3 digital level range while sampling / resampling | Silent at the far left, 0 dB at about 80 % of travel, +12 dB at the right, so "all the way right, then back until the red goes out" (p. 19) works **[assumed]**; red illumination when the level clips (with 300 ms hold) |
+| U38 | MIC vs LINE on a computer | The app has one input device. MIC on = mono from the first input channel with MIC LEVEL (+6..+46 dB); MIC off = stereo LINE with INPUT GAIN. Choose the Mac's built-in mic or an interface as the input device **[deviation, documented]** |
+| U39 | Display in sampling standby | The pattern tempo (it is the tempo used for count-in and beat snapping) **[assumed]** |
+| U40 | What the effect processes while sampling | Only the input being sampled; pads play dry during sampling **[assumed from p. 19]** |
+| U41 | What resample records | The mix after the effect, before OUTPUT GAIN and VOLUME, times CTRL 3 level **[assumed]** |
+| U42 | EXT SOURCE STEREO | The same STEREO setting as sampling (one button) **[assumed]** |
+| U43 | Slicer: repeated slices | A 1 ms dip at each onset that follows a sounding step, so repeated slices articulate **[design choice]** |

@@ -10,6 +10,9 @@ namespace spsx
     {
         for (auto& p : positions)
             p.store (-1);
+        // Queues exist before prepare() so the message thread can post state at any time.
+        uiQueue.resize ((size_t) kFifoSize);
+        timed.resize ((size_t) kTimedSize);
     }
 
     Engine::~Engine()
@@ -48,6 +51,11 @@ namespace spsx
         voices.prepare (rate, maxBlock, {});
         voices.setBudget (limits.channelVoices);
         clip = limits.clipOutput;
+        effects.prepare (rate, maxBlock, limits.effectSlots);
+        extRamp = (float) (1.0 / (0.005 * rate));
+        recPhase = RecPhase::idle;
+        tap = nullptr;
+        tapAttached.store (false);
         for (auto& b : bus)
             b.assign ((size_t) maxBlock, 0.0f);
         uiQueue.resize ((size_t) kFifoSize);
@@ -158,7 +166,7 @@ namespace spsx
         }
 
         rt::ScopedRealtime guard;
-        juce::ignoreUnused (in, numIn);   // live input arrives with sampling (Phase 4)
+        juce::ScopedNoDenormals noDenormals;
 
         // UI commands apply at the start of the block.
         {
@@ -168,6 +176,8 @@ namespace spsx
             for (int i = 0; i < size2; ++i) execute (uiQueue[(size_t) (start2 + i)]);
             uiFifo.finishedRead (size1 + size2);
         }
+
+        updateEffectTempo();
 
         // Timed commands split the block so they land on their exact sample.
         int done = 0;
@@ -184,7 +194,9 @@ namespace spsx
             if (numTimed > 0)
                 segment = (int) std::min<std::int64_t> (segment, timed[0].time - time);
 
-            renderSegment (out, numOut, done, segment);
+            const float* inSeg[2] = { numIn > 0 && in != nullptr && in[0] != nullptr ? in[0] + done : nullptr,
+                                      numIn > 1 && in != nullptr && in[1] != nullptr ? in[1] + done : nullptr };
+            renderSegment (inSeg, numIn, out, numOut, done, segment);
             done += segment;
             time += segment;
         }
@@ -193,12 +205,41 @@ namespace spsx
         publishState();
     }
 
-    void Engine::renderSegment (float* const* out, int numOut, int offset, int n) noexcept
+    bool Engine::isTarget (PadId p) const noexcept
     {
-        float* l = bus[0].data();
-        float* r = bus[1].data();
-        std::fill (l, l + n, 0.0f);
-        std::fill (r, r + n, 0.0f);
+        return fxTargetAll || fxTargets.test ((size_t) p.index());
+    }
+
+    void Engine::updateEffectTempo() noexcept
+    {
+        // Synced effects follow "the tempo of the longest sample of the samples to which
+        // the effect is being applied", or the pattern tempo (p. 44 *1). Pattern playback
+        // arrives in Phase 5; until then the pattern tempo is the fallback.
+        SampleIndex longest = 0;
+        double bpm = 0.0;
+        for (int i = 0; i < kMaxPads; ++i)
+        {
+            const auto& ps = pads[(size_t) i];
+            if (ps.sample == nullptr || ! isTarget (PadId::fromIndex (i)))
+                continue;
+            const auto len = ps.settings.end > ps.settings.start ? ps.settings.end - ps.settings.start : ps.sample->length();
+            if (len > longest && ps.settings.bpm > 0.0)
+            {
+                longest = len;
+                bpm = ps.settings.bpm;
+            }
+        }
+        fxTempo = bpm > 0.0 ? bpm : patternTempo;
+        effectTempoFlag.store (fxTempo, std::memory_order_relaxed);
+    }
+
+    void Engine::renderSegment (const float* const* in, int numIn, float* const* out, int numOut, int offset, int n) noexcept
+    {
+        float* dl = bus[0].data(); float* dr = bus[1].data();
+        float* fl = bus[2].data(); float* fr = bus[3].data();
+        float* il = bus[4].data(); float* ir = bus[5].data();
+        for (auto* b : { dl, dr, fl, fr, il, ir })
+            std::fill (b, b + n, 0.0f);
 
         if (! paused)
         {
@@ -207,55 +248,211 @@ namespace spsx
                 if (! v.isActive())
                     continue;
                 const auto& ps = pads[(size_t) v.getPad().index()];
-                v.render (l, r, n, ps.settings, sourceFor (ps));
+                v.render (dl, dr, fl, fr, n, ps.settings, sourceFor (ps), isTarget (v.getPad()));
             }
         }
 
-        // Output stage: OUTPUT GAIN is an internal processing level ahead of a fixed-point
-        // style clip (manual p. 39), then the analog VOLUME pot.
+        // ---- live input: LINE (stereo, INPUT GAIN) or MIC (mono, MIC LEVEL) ----------
+        float inputPeak = 0.0f;
+        if (in != nullptr && in[0] != nullptr && ! paused)
+        {
+            const float* a = in[0];
+            const float* b = numIn > 1 && in[1] != nullptr ? in[1] : in[0];
+            for (int i = 0; i < n; ++i)
+            {
+                if (micMode)
+                    il[i] = ir[i] = a[i] * micGain;
+                else
+                {
+                    il[i] = a[i] * inputGain;
+                    ir[i] = b[i] * inputGain;
+                }
+                inputPeak = std::max ({ inputPeak, std::abs (il[i]), std::abs (ir[i]) });
+            }
+        }
+        // PEAK lights from about -6 dBFS with a 100 ms hold (FIDELITY: threshold assumed).
+        if (inputPeak >= 0.5f) peakHold = (int) (0.1 * rate);
+        else peakHold = std::max (0, peakHold - n);
+
+        // ---- EXT SOURCE (p. 24): live input played like a pad, with its own LEVEL ----
+        const float extTarget = extOn ? extLevel : 0.0f;
+        const float extSendTarget = fxTargetExt || fxTargetAll ? 1.0f : 0.0f;
+        if (extGain > 0.0f || extTarget > 0.0f)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                extGain += std::clamp (extTarget - extGain, -extRamp, extRamp);
+                extSend += std::clamp (extSendTarget - extSend, -extRamp, extRamp);
+                const float xl = il[i] * extGain;
+                const float xr = (extStereo ? ir[i] : 0.5f * (il[i] + ir[i])) * extGain;
+                const float xm = extStereo ? xl : xr;
+                dl[i] += xm * (1.0f - extSend);
+                dr[i] += xr * (1.0f - extSend);
+                fl[i] += xm * extSend;
+                fr[i] += xr * extSend;
+            }
+        }
+
+        // ---- sampling monitor: input -> digital level -> effect bus (p. 19) ----------
+        float digitalPeak = 0.0f;
+        if (monitor)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                float a = il[i] * digitalLevel, b = ir[i] * digitalLevel;
+                if (! monitorStereo)
+                    a = b = 0.5f * (a + b);
+                fl[i] += a;
+                fr[i] += b;
+                digitalPeak = std::max ({ digitalPeak, std::abs (a), std::abs (b) });
+            }
+        }
+
+        // ---- effects -------------------------------------------------------------------
+        effects.process (fl, fr, n, fxTempo);
+
+        // ---- recorder ------------------------------------------------------------------
+        if (tap != nullptr && recSource == 1)
+        {
+            // Resample: the mix through CTRL 3's level. Check level even while waiting
+            // so the red illumination can be used to set it (p. 26).
+            for (int i = 0; i < n; ++i)
+            {
+                il[i] = (dl[i] + fl[i]) * resampleLevel;
+                ir[i] = (dr[i] + fr[i]) * resampleLevel;
+                digitalPeak = std::max ({ digitalPeak, std::abs (il[i]), std::abs (ir[i]) });
+            }
+            runRecorder (n);
+        }
+        else if (tap != nullptr)
+        {
+            // Sampling records the effect bus: input after digital level and effect.
+            std::copy (fl, fl + n, il);
+            std::copy (fr, fr + n, ir);
+            runRecorder (n);
+        }
+        if (inputPeak > 0.0f && recPhase == RecPhase::waitingTrigger && inputPeak >= autoThreshold)
+        {
+            // Triggered within this segment: start from the next one (sub-block accurate
+            // to the segment, at most 32 samples late on the converted path).
+            recPhase = RecPhase::recording;
+        }
+        if (digitalPeak >= 0.999f) overloadHold = (int) (0.3 * rate);
+        else overloadHold = std::max (0, overloadHold - n);
+
+        // ---- mix and output stage --------------------------------------------------------
+        // OUTPUT GAIN is an internal processing level ahead of a fixed-point style clip
+        // (manual p. 39), then the analog VOLUME pot. The count-in click is added after the
+        // clip so it is never recorded or distorted.
         float pk = peak.load (std::memory_order_relaxed) * 0.999f;
         for (int i = 0; i < n; ++i)
         {
-            float a = l[i] * outputGain;
-            float b = r[i] * outputGain;
+            float a = (dl[i] + fl[i]) * outputGain;
+            float b = (dr[i] + fr[i]) * outputGain;
             if (clip)
             {
                 a = std::clamp (a, -1.0f, 1.0f);
                 b = std::clamp (b, -1.0f, 1.0f);
             }
             pk = std::max ({ pk, std::abs (a), std::abs (b) });
-            l[i] = a * volume;
-            r[i] = b * volume;
+            const float c = click.next();
+            dl[i] = (a + c) * volume;
+            dr[i] = (b + c) * volume;
         }
         peak.store (pk, std::memory_order_relaxed);
 
         if (numOut == 1)
         {
             for (int i = 0; i < n; ++i)
-                out[0][offset + i] = 0.5f * (l[i] + r[i]);
+                out[0][offset + i] = 0.5f * (dl[i] + dr[i]);
         }
         else if (numOut >= 2)
         {
-            std::copy (l, l + n, out[0] + offset);
-            std::copy (r, r + n, out[1] + offset);
+            std::copy (dl, dl + n, out[0] + offset);
+            std::copy (dr, dr + n, out[1] + offset);
             for (int ch = 2; ch < numOut; ++ch)
                 std::fill (out[ch] + offset, out[ch] + offset + n, 0.0f);
         }
+    }
+
+    void Engine::runRecorder (int n) noexcept
+    {
+        // il/ir hold what would be recorded this segment.
+        const float* l = bus[4].data();
+        const float* r = bus[5].data();
+
+        switch (recPhase)
+        {
+            case RecPhase::countIn:
+            {
+                // One bar of clicks: "-1-", "-2-", "-3-", "-4-", then "rEC" (p. 26).
+                for (int i = 0; i < n; ++i)
+                {
+                    const auto elapsed = (std::int64_t) countInBeats * samplesPerBeat - countInLeft;
+                    if (elapsed % samplesPerBeat == 0)
+                    {
+                        click.trigger (elapsed == 0, rate);
+                        countInFlag.store ((int) (elapsed / samplesPerBeat) + 1, std::memory_order_relaxed);
+                    }
+                    if (--countInLeft <= 0)
+                    {
+                        recPhase = RecPhase::recording;
+                        countInFlag.store (0, std::memory_order_relaxed);
+                        // Record the rest of this segment.
+                        const int rest = n - i - 1;
+                        if (rest > 0)
+                        {
+                            tap->write (l + i + 1, r + i + 1, rest);
+                            framesRecorded += rest;
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+
+            case RecPhase::recording:
+            {
+                int m = n;
+                if (framesRecorded + m > maxFrames)
+                    m = (int) std::max<std::int64_t> (0, maxFrames - framesRecorded);
+                if (m > 0)
+                {
+                    tap->write (l, r, m);
+                    framesRecorded += m;
+                }
+                if (framesRecorded >= maxFrames || tap->overflowed.load (std::memory_order_relaxed))
+                    detachTap (RecPhase::full);   // "FUL": over 2 GB (p. 20)
+                break;
+            }
+
+            case RecPhase::idle:
+            case RecPhase::waitingStart:
+            case RecPhase::waitingTrigger:
+            case RecPhase::full:
+                break;
+        }
+    }
+
+    void Engine::detachTap (RecPhase finalPhase) noexcept
+    {
+        tap = nullptr;
+        recPhase = finalPhase == RecPhase::full ? RecPhase::full : RecPhase::idle;
+        countInFlag.store (0, std::memory_order_relaxed);
+        tapAttached.store (false, std::memory_order_release);
     }
 
     void Engine::execute (const Command& c) noexcept
     {
         using T = Command::Type;
 
-        if (paused && c.type != T::resume && c.type != T::setSample && c.type != T::setStretched
-            && c.type != T::setSettings && c.type != T::stopAll)
-        {
-            // PAUSE disables everything except resuming (manual p. 12). State updates and
-            // the panic stop still go through so the model never drifts.
-            if (c.type != T::setPatternTempo && c.type != T::setOutputGainDb && c.type != T::setVolume
-                && c.type != T::setVoiceBudget && c.type != T::setClipOutput)
-                return;
-        }
+        // PAUSE disables performance (manual p. 12); state updates still go through so the
+        // model never drifts, and resume / stop all always work.
+        const bool performance = c.type == T::padDown || c.type == T::padUp || c.type == T::subDown
+                              || c.type == T::subUp || c.type == T::holdDown || c.type == T::stopPad
+                              || c.type == T::recStart;
+        if (paused && performance)
+            return;
 
         switch (c.type)
         {
@@ -324,6 +521,60 @@ namespace spsx
             }
             case T::setVoiceBudget: voices.setBudget ((int) c.value); break;
             case T::setClipOutput:  clip = c.value > 0.5; break;
+
+            // ---- effects ----
+            case T::setEffect:       effects.select (c.index, (int) c.value); break;
+            case T::setEffectParams: effects.setParams (c.index, c.params); break;
+            case T::setEffectLimit:  effects.setLimit (c.value > 0.5); break;
+            case T::setTargetPad:    if (c.pad.isValid()) fxTargets.set ((size_t) c.pad.index(), c.value > 0.5); break;
+            case T::setTargetAll:    fxTargetAll = c.value > 0.5; break;
+            case T::setTargetExt:    fxTargetExt = c.value > 0.5; break;
+            case T::clearTargets:    fxTargets.reset(); fxTargetAll = false; fxTargetExt = false; break;
+
+            // ---- input / EXT SOURCE / sampling ----
+            case T::setInputGainDb:   inputGain = (float) std::pow (10.0, c.value / 20.0); break;
+            case T::setMicMode:       micMode = c.value > 0.5; break;
+            case T::setMicGainDb:     micGain = (float) std::pow (10.0, c.value / 20.0); break;
+            case T::setExtOn:         extOn = c.value > 0.5; break;
+            case T::setExtStereo:     extStereo = c.value > 0.5; break;
+            case T::setExtLevel:      extLevel = (float) (std::clamp (c.value, 0.0, 127.0) / 127.0); break;
+            case T::setMonitor:       monitor = c.value > 0.5; monitorStereo = c.index != 0; break;
+            case T::setDigitalLevel:  digitalLevel = (float) c.value; break;
+            case T::setResampleLevel: resampleLevel = (float) c.value; break;
+
+            case T::recArm:
+            {
+                if (tap != nullptr)
+                    detachTap (RecPhase::idle);
+                tap = static_cast<RecordTap*> (c.ptr);
+                if (tap == nullptr) break;
+                tapAttached.store (true, std::memory_order_release);
+                recSource = c.index;
+                autoThreshold = c.params[0];
+                countInBeats = (int) c.params[1];
+                samplesPerBeat = std::max<std::int64_t> (1, (std::int64_t) std::llround (60.0 / std::max (c.value, 1.0) * rate));
+                countInLeft = (std::int64_t) countInBeats * samplesPerBeat;
+                // About 2 GB of 16-bit audio per sample (p. 20).
+                maxFrames = (std::int64_t) (2'000'000'000LL / (2LL * tap->numChannels()));
+                framesRecorded = 0;
+                if (c.params[2] > 0.5f)       recPhase = RecPhase::waitingStart;
+                else if (autoThreshold > 0.0f) recPhase = RecPhase::waitingTrigger;
+                else if (countInBeats > 0)     recPhase = RecPhase::countIn;
+                else                           recPhase = RecPhase::recording;
+                break;
+            }
+            case T::recStart:
+                if (recPhase == RecPhase::waitingStart)
+                    recPhase = RecPhase::recording;
+                break;
+            case T::recStop:
+                if (tap != nullptr) detachTap (RecPhase::idle);
+                else recPhase = RecPhase::idle;
+                break;
+            case T::recCancel:
+                if (tap != nullptr) detachTap (RecPhase::idle);
+                recPhase = RecPhase::idle;
+                break;
         }
     }
 
@@ -468,5 +719,8 @@ namespace spsx
                 positions[i].store (-1, std::memory_order_relaxed);
 
         voicesInUse.store (voices.usedChannelVoices(), std::memory_order_relaxed);
+        peakLedFlag.store (peakHold > 0, std::memory_order_relaxed);
+        overloadFlag.store (overloadHold > 0, std::memory_order_relaxed);
+        recPhaseFlag.store ((int) recPhase, std::memory_order_relaxed);
     }
 }

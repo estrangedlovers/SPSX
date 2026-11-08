@@ -67,6 +67,7 @@ namespace spsx
             std::optional<std::array<float, 3>> preset;       // REMAIN + knobs
             bool targetAll = false;
             std::bitset<kMaxPads> targets;           // REMAIN + pads
+            bool targetExt = false;                  // REMAIN + EXT SOURCE
             bool grabbing = false;                   // TAP + effect button
             int grabRestore = -1;
         };
@@ -81,6 +82,15 @@ namespace spsx
         };
 
         PanelModel (Engine& engine, SamplerController& controller);
+
+        /** Sends every piece of panel state the engine needs (effect, targets, limit,
+            input gains). Call after the engine or the project changed. */
+        void syncEngine();
+
+        /** Plugin FX processor mode: the host track's audio is the EXT SOURCE, always on
+            and always an effect target, like using the hardware on a DJ mixer. */
+        void setFxProcessorMode (bool on);
+        bool isFxProcessorMode() const noexcept { return fxMode; }
 
         void setCallbacks (Callbacks c) { callbacks = std::move (c); }
 
@@ -105,6 +115,12 @@ namespace spsx
         bool isPatternMode() const noexcept { return patternMode; }
         bool isPaused() const noexcept { return paused; }
         bool isStereo() const noexcept { return stereo; }
+        bool isExtCurrent() const noexcept { return currentIsExt; }
+        bool isExtOn() const noexcept { return extOn; }
+        bool isSampling() const noexcept { return sampling != Sampling::none; }
+        bool isResampling() const noexcept { return resample != Resample::none; }
+        /** Effect index 0..28 that is (or would be) running, or -1. */
+        int activeEffectIndex() const noexcept;
         const EffectState& effects() const noexcept { return fx; }
         const PatternPanelState& pattern() const noexcept { return seq; }
         double knob (Knob k) const noexcept { return knobs[(size_t) k]; }
@@ -124,6 +140,11 @@ namespace spsx
         };
 
         enum class FuncSetting { autoTrig, illumination, effectLimit, midiChannel, midiSync, inputGain, outputGain };
+
+        /** Sampling (p. 18): REC -> choose an empty pad -> standby (monitoring) -> REC. */
+        enum class Sampling { none, choosePad, standby, recording };
+        /** Resample (p. 26): RESAMPLE -> REC -> choose pad -> REC (armed) -> pad starts it. */
+        enum class Resample { none, active, choosePad, padChosen, armed, recording };
 
         struct OpState
         {
@@ -156,6 +177,19 @@ namespace spsx
         void endOp();
         void applyFuncSetting();
         void turnInEdit (Knob k, double v, double now);
+        void pressExt (double now);
+        void releaseExt();
+        void pressResample (double now);
+        void exitSampling (bool cancelRecording);
+        void exitResample (bool cancelRecording);
+        void startRecording (bool resampling, double now);
+
+        // engine sync
+        void syncEffect();
+        void sendEffectParams (int effect);
+        void syncTargets();
+        void selectEffectParamsFromKnobs (int effect);
+        static float levelFromKnob (double v);
 
         // helpers
         PadId padAt (int index) const noexcept { return { bankIndex, index }; }
@@ -218,6 +252,22 @@ namespace spsx
         double busyUntil = 0.0;
         double lastEffectBlinkUntil = 0.0;
         bool remainShowing = false;
+
+        // EXT SOURCE and input
+        bool currentIsExt = false, extOn = false, extGate = false, extHeld = false, fxMode = false;
+        int extLevel = 127;   // not stored: 127 at every power-on (p. 24)
+
+        // sampling / resampling
+        Sampling sampling = Sampling::none;
+        Resample resample = Resample::none;
+        PadId recordDest = kNoPad;
+        bool tempoSpecified = false;
+        double digitalLevelKnob = 0.8, resampleLevelKnob = 0.8;
+
+        // last state sent to the engine
+        int sentEffect = -2;
+        std::bitset<kMaxPads> sentTargets;
+        bool sentTargetAll = false, sentTargetExt = false;
 
         CancelDetector cancelDetector;
         double lastActivity = 0.0;

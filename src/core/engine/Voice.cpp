@@ -14,12 +14,14 @@ namespace spsx
         engineRate = rate;
         for (auto& s : scratch)
             s.assign ((size_t) maxBlock, 0.0f);
+        sendStep = (float) (1.0 / (0.005 * rate));
         lofi.prepare (rate, lofiParams);
         state = State::idle;
     }
 
     void Voice::start (PadId padIn, const Source& src, const PadSettings& s, std::int64_t now)
     {
+        send = -1.0f;   // set on first render from the target state (no glide at note start)
         pad = padIn;
         current = src.sample;
         currentStretched = src.stretched;
@@ -151,10 +153,15 @@ namespace spsx
         return n;
     }
 
-    void Voice::render (float* busL, float* busR, int n, const PadSettings& s, const Source&) noexcept
+    void Voice::render (float* dryL, float* dryR, float* fxL, float* fxR, int n,
+                        const PadSettings& s, const Source&, bool toEffect) noexcept
     {
         if (state == State::idle)
             return;
+
+        const float sendTarget = toEffect ? 1.0f : 0.0f;
+        if (send < 0.0f)
+            send = sendTarget;
 
         float* tmp[2] = { scratch[0].data(), scratch[1].data() };
         const int produced = renderSource (tmp, n, s);
@@ -189,8 +196,11 @@ namespace spsx
 
             const float l = tmp[0][i] * g;
             const float r = (channels > 1 ? tmp[1][i] : tmp[0][i]) * g;   // mono feeds both sides equally
-            busL[i] += l;
-            busR[i] += r;
+            send += std::clamp (sendTarget - send, -sendStep, sendStep);
+            dryL[i] += l * (1.0f - send);
+            dryR[i] += r * (1.0f - send);
+            fxL[i] += l * send;
+            fxR[i] += r * send;
         }
         gain = target;
 

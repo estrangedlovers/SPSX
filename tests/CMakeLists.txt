@@ -7,7 +7,9 @@ add_executable(SPSXTests
     TestIO.cpp
     TestController.cpp
     TestMisc.cpp
-    TestPanelModel.cpp)
+    TestPanelModel.cpp
+    TestEffects.cpp
+    TestSampling.cpp)
 
 spsx_use_shared_code(SPSXTests)
 target_link_libraries(SPSXTests PRIVATE Catch2::Catch2WithMain)

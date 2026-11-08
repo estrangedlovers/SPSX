@@ -28,6 +28,16 @@ namespace spsx
         keysButton.onClick = [this] { panel.setShowKeyLabels (keysButton.getToggleState()); };
         addAndMakeVisible (keysButton);
 
+        // FX Mode only makes sense inside a host: the track's audio becomes EXT SOURCE.
+        fxModeButton.setClickingTogglesState (true);
+        fxModeButton.setWantsKeyboardFocus (false);
+        fxModeButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd04020));
+        fxModeButton.setTooltip ("Run the host track's audio through the effects (EXT SOURCE always on)");
+        fxModeButton.setToggleState (proc.isFxMode(), juce::dontSendNotification);
+        fxModeButton.onClick = [this] { proc.setFxMode (fxModeButton.getToggleState()); };
+        if (proc.wrapperType != juce::AudioProcessor::wrapperType_Standalone)
+            addAndMakeVisible (fxModeButton);
+
         status.setColour (juce::Label::textColourId, juce::Colour (0xff8d8e8a));
         status.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (status);
@@ -116,6 +126,11 @@ namespace spsx
         extendedButton.setBounds (bar.removeFromLeft (90));
         bar.removeFromLeft (8);
         keysButton.setBounds (bar.removeFromLeft (80));
+        if (fxModeButton.isVisible())
+        {
+            bar.removeFromLeft (8);
+            fxModeButton.setBounds (bar.removeFromLeft (80));
+        }
         status.setBounds (bar);
 
         if (proc.isExtended())

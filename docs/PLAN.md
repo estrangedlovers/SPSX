@@ -33,21 +33,22 @@ Each phase ends with: clean build, tests green, `docs/PROGRESS.md` updated, comm
 - [x] panel_snapshot tool for headless screenshots
 - Deferred: backup load/save (needs projects, Phase 7); pattern copy/exchange/delete (Phase 5); sticker layer (Phase 8)
 
-## Phase 3: Effects
-1. Shared DSP: ZDF SVF, oversampler (4x, polyphase IIR or FIR), delay lines, LFOs, smoothers, envelope followers, noise.
-2. EffectHost: one slot (Authentic) / two (Extended), crossfade switching, Effect Grab, REMAIN targets, REMAIN presets, MFX selection by CTRL 3 / MFX+pad / MFX+DJFX+pad, hidden FLANGER/PHASER balance.
-3. Tempo reference: longest targeted sample vs pattern tempo.
-4. 29 effects, by family (analog-style, lo-fi, time-based, pitch/voice, spatial/mod).
-5. Effect Limit on the 17 starred effects.
-6. Per-effect tests: NaN/Inf/denormal at extremes, bounded output with Limit on, silence in/out (except Noise Gen, Vinyl Sim, Subsonic edge cases), tempo sync accuracy.
-7. FIDELITY.md updated per effect.
+## Phase 3: Effects (done)
+- [x] Shared DSP: ZDF SVF, biquads, LR4, 4x oversampling, delay lines, LFOs, smoothers, envelope followers, pitch shifter, noise
+- [x] EffectHost: crossfaded switching, chunked processing, Effect Limit safety limiter, no allocation; keeps state across re-prepare
+- [x] All 29 effects; Effect Limit on the 17 starred effects
+- [x] Routing: dry/effect buses, targets (current pad, REMAIN pads, all, EXT SOURCE), glide on target change, tempo reference
+- [x] Panel: effect selection (buttons, MFX 3 ways, EFFECT GRAB, REMAIN presets), per-effect value displays
+- [x] Tests: stability at extremes, silence, limiter ceiling, click-free switching, sync accuracy, real-time safety
+- [ ] pluginval at strictness 10 (CI, macOS)
 
-## Phase 4: Sampling, EXT SOURCE, resample
-1. Recorder: device input (Mac mic = MIC, interface = LINE), input gain, MIC LEVEL, digital level, PEAK, red illumination, STEREO.
-2. Flows: sampling, auto trigger (0..9), tempo sampling with end snap, count-in, FUL, REMAIN display from free disk space.
-3. EXT SOURCE pass-through, GATE momentary, stereo/mono, level (not persisted).
-4. Resample with 4 / 2 polyphony, empty-pad rule, CTRL 3 level, CANCEL exit.
-5. Plugin: sample from input bus; FX processor mode.
+## Phase 4: Sampling, EXT SOURCE, resample (done)
+- [x] Input stage: LINE with INPUT GAIN, MIC with MIC LEVEL, PEAK, digital level, red illumination
+- [x] Sampling: REC, empty-pad choice, standby monitoring through the effect, REC/REC, auto trigger (rdY), count-in (-1-..-4-), tempo snap, FUL
+- [x] Disk recording through a lock-free FIFO and writer thread; 16-bit bit-exact (Authentic) / float (Extended); WAV or AIFF per setting
+- [x] EXT SOURCE: toggle or GATE momentary, level, stereo/mono, effect target (REMAIN + EXT)
+- [x] Resample: RESAMPLE (LEU), CTRL 3 level, 4-voice budget, empty destination, armed start on the source pad
+- [x] Plugin: input bus sampling; FX Mode (track audio through the effects)
 
 ## Phase 5: Pattern sequencer
 1. Pattern data (96 PPQN), tempo table, length rules (1..20, then 4-bar steps).

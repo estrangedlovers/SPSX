@@ -9,6 +9,8 @@
 //   700   set A1 gate=1 loop=1 reverse=0 lofi=1 level=100 start=0 end=44100
 //   800   tempo 128        900  stopall   950  pause / resume
 //   1000  outgain 6        (dB)
+//   1100  fx 2 0.58 0.5 0.6   effect 0..28 (-1 = off) with CTRL 1..3 (0..1)
+//   1200  target A1 | target all | limit 1
 //
 // Rendering goes through EngineHost, so a --rate other than 44100 exercises the
 // 44.1 kHz internal-rate conversion exactly as the plugin does.
@@ -145,6 +147,31 @@ int main (int argc, char** argv)
             else if (t[0] == "resume")   sched (Command::Type::resume);
             else if (t[0] == "tempo")    controller.setPatternTempo (t[1].getDoubleValue());
             else if (t[0] == "outgain")  controller.setOutputGainDb (t[1].getIntValue());
+            else if (t[0] == "fx")
+            {
+                const int effect = t[1].getIntValue();
+                if (effect >= 0)
+                {
+                    Command p;
+                    p.type = Command::Type::setEffectParams;
+                    p.index = effect;
+                    p.params = { t.size() > 2 ? t[2].getFloatValue() : 0.5f, t.size() > 3 ? t[3].getFloatValue() : 0.5f,
+                                 t.size() > 4 ? t[4].getFloatValue() : 0.5f, 0.5f };
+                    host.scheduleAt (p, offset);
+                }
+                sched (Command::Type::setEffect, kNoPad, effect);
+            }
+            else if (t[0] == "target")
+            {
+                if (t[1] == "all") sched (Command::Type::setTargetAll, kNoPad, 1.0);
+                else
+                {
+                    auto id = parsePad (t[1]);
+                    if (! id) return fail ("bad pad " + t[1]);
+                    sched (Command::Type::setTargetPad, *id, 1.0);
+                }
+            }
+            else if (t[0] == "limit")    sched (Command::Type::setEffectLimit, kNoPad, t[1].getDoubleValue());
             else if (t[0] == "set")
             {
                 auto id = parsePad (t[1]);

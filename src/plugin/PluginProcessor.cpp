@@ -121,6 +121,7 @@ namespace spsx
         root->setProperty ("project", controller.project().toVar());
         root->setProperty ("volume", volumeParam->load());
         root->setProperty ("extended", extended);
+        root->setProperty ("fxMode", isFxMode());
         const auto json = juce::JSON::toString (juce::var (root));
         destData.replaceAll (json.toRawUTF8(), json.getNumBytesAsUTF8());
     }
@@ -133,6 +134,7 @@ namespace spsx
             return;
 
         setExtended ((bool) v.getProperty ("extended", false));
+        setFxMode ((bool) v.getProperty ("fxMode", false));
         if (auto* vol = params.getParameter ("volume"))
             vol->setValueNotifyingHost ((float) v.getProperty ("volume", 0.8));
 
@@ -144,6 +146,7 @@ namespace spsx
                 toLoad.emplace_back (PadId::fromIndex (i), p.pads[(size_t) i]);
 
         controller.setProject (p);
+        panel.syncEngine();
         for (auto& [pad, slot] : toLoad)
         {
             const auto settings = slot.settings;

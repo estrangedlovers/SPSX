@@ -44,6 +44,10 @@ namespace spsx
         /** Authentic (hardware limits) or Extended mode. Message thread. */
         void setExtended (bool shouldBeExtended);
         bool isExtended() const noexcept { return extended; }
+
+        /** Plugin FX processor mode: the track's audio runs through the effects. */
+        void setFxMode (bool on) { panel.setFxProcessorMode (on); }
+        bool isFxMode() const noexcept { return panel.isFxProcessorMode(); }
         std::function<void()> onModeChanged;
 
         static double nowSeconds() noexcept { return juce::Time::getMillisecondCounterHiRes() * 0.001; }

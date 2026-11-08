@@ -1,5 +1,6 @@
 #include "SidePanel.h"
 #include "core/sampler/SampleEdit.h"
+#include "core/fx/EffectInfo.h"
 
 namespace spsx::ui
 {
@@ -228,6 +229,23 @@ namespace spsx::ui
                                        : s.timeModify == TimeModifyMode::pattern ? juce::String ("follow pattern")
                                        : juce::String (s.timeModifyBpm, 1) + " BPM") << "\n";
         }
+        // Effect in use and its parameters, as the display would show them.
+        const int effect = model.activeEffectIndex();
+        text << "\nEffect: ";
+        if (effect < 0)
+            text << "off";
+        else
+        {
+            const auto& info = fx::info (effect);
+            const auto& p = model.effects().params[(size_t) effect];
+            text << info.name << "\n";
+            for (int k = 0; k < 3; ++k)
+                text << "  " << info.params[(size_t) k].code << " "
+                     << fx::display (effect, k, p[(size_t) k], 120.0).toString() << (k < 2 ? "" : "\n");
+        }
+        if (model.isExtCurrent())
+            text << "EXT SOURCE " << (model.isExtOn() ? "on" : "off") << "\n";
+
         if (text != infoText || pad != shownPad)
         {
             infoText = text;
@@ -250,7 +268,7 @@ namespace spsx::ui
             g.drawText (title, area.reduced (10, 6).removeFromTop (16), juce::Justification::centredLeft);
         };
 
-        auto info = r.removeFromTop (170);
+        auto info = r.removeFromTop (230);
         section (info, "PAD INFO");
         g.setColour (kText);
         g.setFont (juce::Font (juce::FontOptions (14.0f)));
@@ -270,7 +288,7 @@ namespace spsx::ui
     void SidePanel::resized()
     {
         auto r = getLocalBounds().reduced (12);
-        r.removeFromTop (170 + 10);
+        r.removeFromTop (230 + 10);
         auto wave = r.removeFromTop (220);
         waveform.setBounds (wave.reduced (10).withTrimmedTop (22));
     }

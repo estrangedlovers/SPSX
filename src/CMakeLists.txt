@@ -7,6 +7,14 @@ target_sources(SPSX PRIVATE
     core/sampler/StretchRenderer.cpp
     core/state/Project.cpp
     core/SamplerController.cpp
+    core/fx/EffectInfo.cpp
+    core/fx/Effects.cpp
+    core/fx/EffectsFilterDrive.cpp
+    core/fx/EffectsTime.cpp
+    core/fx/EffectsLofi.cpp
+    core/fx/EffectsPitch.cpp
+    core/fx/EffectsLoop.cpp
+    core/fx/EffectHost.cpp
     core/ui_model/Controls.cpp
     core/ui_model/DisplayText.cpp
     core/ui_model/PanelModel.cpp

@@ -1,5 +1,30 @@
 # PROGRESS
 
+## Phases 3 and 4: Effects, sampling, EXT SOURCE, resample (status: done, released as v0.4.0)
+
+### Done
+- **29 effects** (`src/core/fx`): all direct and MFX effects with their CTRL 1..3 parameters, display values (0..127, note values, P01..P16, -1.0..1.0, oFF/on, oFF/1..8, semitones), Effect Limit on the 17 starred effects plus an output safety limiter, tempo sync to the longest targeted sample, 4x oversampled drive stages, the manual's Slicer patterns.
+- **EffectHost**: all effects prepared up front (no allocation when switching), 25 ms equal-power cross-fades, 32-sample parameter refresh, survives host re-prepare.
+- **Routing**: dry and effect buses; per-pad targets (last pad, REMAIN + pads, REMAIN + effect = all, REMAIN + EXT SOURCE) with 5 ms glides.
+- **Panel**: effect buttons drive the engine, MFX selection three ways, EFFECT GRAB, REMAIN presets, per-effect value display, Effect Limit and input gain from FUNC menus.
+- **Input stage**: LINE (stereo, INPUT GAIN) or MIC (mono, MIC LEVEL), PEAK, digital level with red illumination on clipping.
+- **Sampling**: REC, empty pad, standby monitoring through the effect, auto trigger (rdY), count-in (-1-..-4-), tempo snap, FUL; streamed to disk through a lock-free FIFO and writer thread, 16-bit bit-exact in Authentic mode.
+- **EXT SOURCE**: toggle or GATE momentary, LEVEL, stereo/mono, effect target.
+- **Resample**: LEU level, 4-voice budget, empty destination, armed start on the source pad.
+- **Plugin FX Mode** (track audio through the effects), saved with the session.
+- Tests: 112 test cases (effect stability, silence, limiter ceiling, click-free switching, sync accuracy, routing, recording bit-exactness, count-in, auto trigger, resample start, panel flows, real-time safety).
+
+### Known issues
+- The UI was reviewed from headless renders only; please check it on your Mac.
+- MIC and LINE share one input device (SPEC U38).
+- Pattern-related flows (pattern playback, pattern copy/exchange/delete, ErS) and backup load/save are still stubs (Phase 5 / 7).
+- New working decisions U35 to U43 in SPEC section 14.
+
+### Next
+Phase 5: pattern sequencer.
+
+---
+
 ## Phase 2: Hardware UI (status: done, awaiting review)
 
 ### Done

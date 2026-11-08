@@ -1,6 +1,7 @@
 #include "PanelModel.h"
 #include "../Tempo.h"
 #include "../sampler/TimeModify.h"
+#include "../fx/EffectInfo.h"
 #include <cmath>
 #include <cstdio>
 
@@ -29,6 +30,133 @@ namespace spsx
     PanelModel::PanelModel (Engine& e, SamplerController& c)
         : engine (e), controller (c)
     {
+        for (int i = 0; i < fx::kNumEffects; ++i)
+            fx.params[(size_t) i] = fx::info (i).defaults;
+        syncEngine();
+    }
+
+    // ---- engine sync ------------------------------------------------------------------
+
+    float PanelModel::levelFromKnob (double v)
+    {
+        // Digital level (CTRL 3 while sampling / resampling): silent at the far left,
+        // 0 dB at about 80 % of travel, +12 dB at the right end, so "all the way right,
+        // then back until the red goes out" (p. 19) works as described.
+        if (v <= 0.0) return 0.0f;
+        return (float) std::pow (10.0, (-48.0 + 60.0 * v) / 20.0);
+    }
+
+    int PanelModel::activeEffectIndex() const noexcept
+    {
+        if (fx.active < 0) return -1;
+        return fx.active == 5 ? fx::mfxIndex (fx.mfxType) : fx.active;
+    }
+
+    void PanelModel::selectEffectParamsFromKnobs (int effect)
+    {
+        // The CTRL knobs are absolute pots: a newly selected effect takes their current
+        // positions (SPEC U34), unless REMAIN + knobs pre-set values (p. 13). While
+        // sampling or resampling CTRL 3 is the level, so the effect keeps its own value.
+        auto& p = fx.params[(size_t) effect];
+        if (fx.preset)
+        {
+            for (size_t k = 0; k < 3; ++k) p[k] = (*fx.preset)[k];
+            fx.preset.reset();
+            return;
+        }
+        p[0] = (float) knobs[0];
+        p[1] = (float) knobs[1];
+        if (sampling == Sampling::none && resample == Resample::none)
+            p[2] = (float) knobs[2];
+    }
+
+    void PanelModel::sendEffectParams (int effect)
+    {
+        if (effect < 0) return;
+        Command c;
+        c.type = Command::Type::setEffectParams;
+        c.index = effect;
+        c.params = fx.params[(size_t) effect];
+        engine.post (c);
+    }
+
+    void PanelModel::syncEffect()
+    {
+        const int effect = activeEffectIndex();
+        if (effect == sentEffect)
+            return;
+        if (effect >= 0)
+        {
+            selectEffectParamsFromKnobs (effect);
+            sendEffectParams (effect);
+        }
+        Command c;
+        c.type = Command::Type::setEffect;
+        c.index = 0;
+        c.value = effect;
+        engine.post (c);
+        sentEffect = effect;
+    }
+
+    void PanelModel::syncTargets()
+    {
+        // "Normally, the effect will be applied only to the pad you pressed most recently"
+        // (p. 13). REMAIN + pads / EXT SOURCE pick several, REMAIN + effect button picks all.
+        // While sampling, the effect processes the input instead (p. 19).
+        std::bitset<kMaxPads> want;
+        bool all = false, ext = fxMode;
+        if (sampling == Sampling::standby || sampling == Sampling::recording)
+        {
+            // input only
+        }
+        else if (fx.targetAll)
+            all = true;
+        else if (fx.targets.any() || fx.targetExt)
+        {
+            want = fx.targets;
+            ext = ext || fx.targetExt;
+        }
+        else if (currentIsExt)
+            ext = true;
+        else if (current.isValid())
+            want.set ((size_t) current.index());
+
+        if (all != sentTargetAll) { sendEngine (Command::Type::setTargetAll, kNoPad, all ? 1.0 : 0.0); sentTargetAll = all; }
+        if (ext != sentTargetExt) { sendEngine (Command::Type::setTargetExt, kNoPad, ext ? 1.0 : 0.0); sentTargetExt = ext; }
+        const auto changed = want ^ sentTargets;
+        if (changed.any())
+            for (int i = 0; i < kMaxPads; ++i)
+                if (changed.test ((size_t) i))
+                    sendEngine (Command::Type::setTargetPad, PadId::fromIndex (i), want.test ((size_t) i) ? 1.0 : 0.0);
+        sentTargets = want;
+    }
+
+    void PanelModel::syncEngine()
+    {
+        const auto& dev = controller.project().device;
+        sendEngine (Command::Type::setEffectLimit, kNoPad, dev.effectLimit ? 1.0 : 0.0);
+        sendEngine (Command::Type::setInputGainDb, kNoPad, dev.inputGainDb);
+        sendEngine (Command::Type::setMicMode, kNoPad, mic ? 1.0 : 0.0);
+        sendEngine (Command::Type::setMicGainDb, kNoPad, 6.0 + 40.0 * knobs[(size_t) Knob::micLevel]);
+        sendEngine (Command::Type::setExtLevel, kNoPad, extLevel);
+        sendEngine (Command::Type::setExtStereo, kNoPad, stereo ? 1.0 : 0.0);
+        sendEngine (Command::Type::setExtOn, kNoPad, extOn ? 1.0 : 0.0);
+        sentEffect = -2;
+        sentTargets.reset();
+        sentTargetAll = sentTargetExt = false;
+        sendEngine (Command::Type::clearTargets);
+        syncEffect();
+        syncTargets();
+        for (int e = 0; e < fx::kNumEffects; ++e)
+            sendEffectParams (e);
+    }
+
+    void PanelModel::setFxProcessorMode (bool on)
+    {
+        fxMode = on;
+        extOn = on || (extOn && ! fxMode);
+        sendEngine (Command::Type::setExtOn, kNoPad, extOn ? 1.0 : 0.0);
+        syncTargets();
     }
 
     const std::array<const char*, 10>& PanelModel::quantizeNames()
@@ -162,8 +290,22 @@ namespace spsx
                 toggleMode (c, now);
                 break;
 
-            case Control::stereo:     stereo = ! stereo; break;
-            case Control::mic:        mic = ! mic; break;
+            case Control::stereo:
+                stereo = ! stereo;
+                sendEngine (Command::Type::setExtStereo, kNoPad, stereo ? 1.0 : 0.0);
+                if (sampling == Sampling::standby)
+                {
+                    Command m;
+                    m.type = Command::Type::setMonitor;
+                    m.value = 1.0;
+                    m.index = stereo ? 1 : 0;
+                    engine.post (m);
+                }
+                break;
+            case Control::mic:
+                mic = ! mic;
+                sendEngine (Command::Type::setMicMode, kNoPad, mic ? 1.0 : 0.0);
+                break;
 
             case Control::startEndLevel: toggleEdit (Edit::startEndLevel, now); break;
             case Control::timeBpm:       toggleEdit (Edit::timeBpm, now); break;
@@ -190,10 +332,8 @@ namespace spsx
                     sendEngine (Command::Type::subDown);
                 break;
 
-            case Control::resample:
-            case Control::extSource:
-                flash ("---", now, 1.0);   // Phase 4
-                break;
+            case Control::resample:  pressResample (now); break;
+            case Control::extSource: pressExt (now); break;
 
             default: break;
         }
@@ -210,6 +350,7 @@ namespace spsx
             case Control::mark:    markHeld = false; return;
             case Control::tapTempo: tapHeld = false; return;
             case Control::hold:    holdHeld = false; return;
+            case Control::extSource: releaseExt(); return;
             case Control::subPad:
                 if (subHeld && ! patternMode)
                     sendEngine (Command::Type::subUp);
@@ -254,14 +395,48 @@ namespace spsx
             fx.mfxType = index + 1 + (djfxHeldForMfx ? 12 : 0);
             mfxUsedAsModifier = true;
             flash (DisplayText::number (fx.mfxType), now);
+            syncEffect();
             return;
         }
         if (remainHeld)
         {
             // REMAIN + pad: current pad without playing it, and toggle it as an effect target.
             current = pad;
+            currentIsExt = false;
             fx.targets.flip ((size_t) pad.index());
             fx.targetAll = false;
+            syncTargets();
+            return;
+        }
+
+        // Sampling: choose the empty pad to record into (p. 18).
+        if (sampling == Sampling::choosePad)
+        {
+            if (bankProtected (pad.bank)) { flash ("Prt", now); return; }
+            if (hasSample (pad)) return;   // only empty pads blink
+            recordDest = pad;
+            sampling = Sampling::standby;
+            tempoSpecified = false;
+            Command m;
+            m.type = Command::Type::setMonitor;
+            m.value = 1.0;
+            m.index = stereo ? 1 : 0;
+            engine.post (m);
+            sendEngine (Command::Type::setDigitalLevel, kNoPad, levelFromKnob (digitalLevelKnob));
+            syncTargets();
+            return;
+        }
+        if (sampling != Sampling::none)
+            return;
+
+        // Resample: choose the destination, then a pad press starts playback and recording
+        // together (p. 26).
+        if (resample == Resample::choosePad || resample == Resample::padChosen)
+        {
+            if (bankProtected (pad.bank)) { flash ("Prt", now); return; }
+            if (hasSample (pad)) return;   // "You can't resample to a pad to which a sample is already assigned."
+            recordDest = pad;
+            resample = Resample::padChosen;
             return;
         }
         if (patternMode)
@@ -276,13 +451,22 @@ namespace spsx
         }
 
         current = pad;
+        currentIsExt = false;
         if (edit == Edit::startEndLevel)
             beginFineAdjust();
         if (edit == Edit::timeBpm && hasSample (pad))
             bpmAtEntry = controller.settings (pad)->bpm;
 
+        // Targets first, so the new voice starts on the right bus.
+        syncTargets();
         sendEngine (Command::Type::padDown, pad);
         padsDownInEngine.set ((size_t) index);
+
+        if (resample == Resample::armed && hasSample (pad))
+        {
+            controller.startArmedRecording();   // same engine block as the pad hit
+            resample = Resample::recording;
+        }
     }
 
     void PanelModel::releasePad (int index)
@@ -298,11 +482,23 @@ namespace spsx
 
     void PanelModel::pressEffect (int index, double now)
     {
+        juce::ignoreUnused (now);
         if (op.op != Op::none)
             return;
 
-        if (index == 5)   // MFX doubles as a modifier: toggle on release unless used as one
+        if (tapHeld && ! mfxHeld)
         {
+            // EFFECT GRAB: on only while the effect button is held (p. 13).
+            fx.grabbing = true;
+            fx.grabRestore = fx.active;
+            fx.active = index;
+            syncEffect();
+            return;
+        }
+        if (index == 5)
+        {
+            // MFX doubles as a modifier: it toggles on release unless MFX + pad / DJFX /
+            // CTRL 3 was used while it was held (SPEC U31).
             mfxHeld = true;
             mfxUsedAsModifier = false;
             return;
@@ -317,16 +513,10 @@ namespace spsx
         {
             // REMAIN + effect button: apply to all samples (p. 13).
             fx.targetAll = true;
+            fx.targets.reset();
             fx.active = index;
-            if (fx.preset) { for (int k = 0; k < 3; ++k) fx.params[(size_t) index][(size_t) k] = (*fx.preset)[(size_t) k]; fx.preset.reset(); }
-            return;
-        }
-        if (tapHeld)
-        {
-            // EFFECT GRAB: on only while the effect button is held (p. 13).
-            fx.grabbing = true;
-            fx.grabRestore = fx.active;
-            fx.active = index;
+            syncTargets();
+            syncEffect();
             return;
         }
 
@@ -336,41 +526,36 @@ namespace spsx
             fx.active = -1;
         }
         else
-        {
             fx.active = index;
-            if (fx.preset)
-            {
-                for (int k = 0; k < 3; ++k)
-                    fx.params[(size_t) index][(size_t) k] = (*fx.preset)[(size_t) k];
-                fx.preset.reset();
-            }
-        }
-        juce::ignoreUnused (now);
+        syncEffect();
     }
 
     void PanelModel::releaseEffect (int index)
     {
+        if (fx.grabbing && fx.active == index)
+        {
+            fx.lastActive = index;
+            fx.active = fx.grabRestore;
+            fx.grabbing = false;
+            syncEffect();
+            if (index == 5)
+                mfxHeld = false;
+            return;
+        }
+
         if (index == 5)
         {
             if (mfxHeld && ! mfxUsedAsModifier && op.op == Op::none && ! paused)
             {
-                const int mfxSlot = 5;
-                if (fx.grabbing) { fx.active = mfxSlot; }
-                else if (fx.active == mfxSlot) { fx.lastActive = mfxSlot; fx.active = -1; }
-                else fx.active = mfxSlot;
+                if (fx.active == 5) { fx.lastActive = 5; fx.active = -1; }
+                else fx.active = 5;
+                syncEffect();
             }
             mfxHeld = false;
             djfxHeldForMfx = false;
         }
         if (index == 4)
             djfxHeldForMfx = false;
-
-        if (fx.grabbing && fx.active == index)
-        {
-            fx.lastActive = index;
-            fx.active = fx.grabRestore;
-            fx.grabbing = false;
-        }
     }
 
     // ---- banks ------------------------------------------------------------------------
@@ -389,7 +574,24 @@ namespace spsx
 
     void PanelModel::toggleMode (Control c, double now)
     {
-        if (op.op != Op::none || ! hasSample (current))
+        if (op.op != Op::none)
+            return;
+
+        if (currentIsExt)
+        {
+            // With EXT SOURCE current, GATE makes it momentary (p. 24).
+            if (c == Control::gate)
+            {
+                extGate = ! extGate;
+                if (extGate && extOn && ! extHeld && ! fxMode)
+                {
+                    extOn = false;
+                    sendEngine (Command::Type::setExtOn, kNoPad, 0.0);
+                }
+            }
+            return;
+        }
+        if (! hasSample (current))
             return;
 
         const auto status = controller.editSettings (current, [c] (PadSettings& s)
@@ -434,6 +636,116 @@ namespace spsx
     }
 
     // ---- DEL / REC / MARK / CANCEL / REMAIN / TAP -------------------------------------
+
+    // ---- EXT SOURCE (p. 24) -------------------------------------------------------------
+
+    void PanelModel::pressExt (double now)
+    {
+        juce::ignoreUnused (now);
+        if (op.op != Op::none || patternMode)
+            return;
+
+        if (remainHeld)
+        {
+            // REMAIN + EXT SOURCE: make it the current pad / an effect target.
+            currentIsExt = true;
+            fx.targetExt = ! fx.targetExt;
+            fx.targetAll = false;
+            syncTargets();
+            return;
+        }
+
+        currentIsExt = true;
+        extHeld = true;
+        if (! fxMode)
+        {
+            extOn = extGate ? true : ! extOn;
+            sendEngine (Command::Type::setExtOn, kNoPad, extOn ? 1.0 : 0.0);
+        }
+        syncTargets();
+    }
+
+    void PanelModel::releaseExt()
+    {
+        extHeld = false;
+        if (extGate && extOn && ! fxMode)
+        {
+            extOn = false;
+            sendEngine (Command::Type::setExtOn, kNoPad, 0.0);
+        }
+    }
+
+    // ---- sampling and resampling (p. 18, 25, 26) ---------------------------------------
+
+    void PanelModel::startRecording (bool resampling, double now)
+    {
+        SamplerController::RecordOptions o;
+        o.destination = recordDest;
+        o.stereo = stereo;
+        o.resample = resampling;
+        o.tempo = controller.project().patternTempo;
+        if (! resampling)
+        {
+            // Auto sampling: start when the input exceeds the AUTO TRIG LEVEL (p. 25).
+            // Levels 1..9 map to -54..-6 dBFS in 6 dB steps (SPEC U35).
+            const int lvl = controller.project().device.autoTrigLevel;
+            o.autoTriggerGain = lvl > 0 ? (float) std::pow (10.0, (-54.0 + 6.0 * (lvl - 1)) / 20.0) : 0.0f;
+            // START/END/LEVEL lit + REC = one bar of count-in (p. 26).
+            o.countInBeats = edit == Edit::startEndLevel ? 4 : 0;
+            o.snapToTempo = tempoSpecified || o.countInBeats > 0;
+        }
+        o.waitForStart = resampling;
+
+        const auto status = controller.beginRecording (o);
+        if (status != SamplerController::Status::ok)
+        {
+            reportStatus (status, now);
+            if (resampling) exitResample (false);
+            else            exitSampling (false);
+            return;
+        }
+        if (resampling) resample = Resample::armed;
+        else            sampling = Sampling::recording;
+    }
+
+    void PanelModel::exitSampling (bool cancelRecording)
+    {
+        if (cancelRecording && sampling == Sampling::recording)
+            controller.cancelRecording();
+        sampling = Sampling::none;
+        Command m;
+        m.type = Command::Type::setMonitor;
+        m.value = 0.0;
+        engine.post (m);
+        syncTargets();
+    }
+
+    void PanelModel::pressResample (double now)
+    {
+        if (op.op != Op::none || patternMode || sampling != Sampling::none)
+            return;
+        if (resample != Resample::none)
+        {
+            exitResample (true);
+            return;
+        }
+        // While resampling the polyphony drops to 4 mono / 2 stereo (p. 26).
+        resample = Resample::active;
+        sendEngine (Command::Type::setVoiceBudget, kNoPad, controller.limits().resampleChannelVoices);
+        Command c;
+        c.type = Command::Type::setResampleLevel;
+        c.value = levelFromKnob (resampleLevelKnob);
+        engine.post (c);
+        flash ("LEU", now);
+    }
+
+    void PanelModel::exitResample (bool cancelRecording)
+    {
+        if (cancelRecording && (resample == Resample::armed || resample == Resample::recording))
+            controller.cancelRecording();
+        resample = Resample::none;
+        sendEngine (Command::Type::setVoiceBudget, kNoPad, controller.limits().channelVoices);
+    }
 
     void PanelModel::pressDel (double now)
     {
@@ -548,7 +860,35 @@ namespace spsx
             }
 
             case Op::none:
-                flash ("---", now, 1.0);   // sampling (Phase 4) and pattern recording (Phase 5)
+                if (patternMode)
+                {
+                    flash ("---", now, 1.0);   // pattern recording arrives in Phase 5
+                    return;
+                }
+                switch (resample)
+                {
+                    case Resample::active:    resample = Resample::choosePad; return;
+                    case Resample::choosePad: return;
+                    case Resample::padChosen: startRecording (true, now); return;
+                    case Resample::armed:     return;   // waiting for the source pad
+                    case Resample::recording:
+                        controller.stopRecording();
+                        exitResample (false);
+                        busy (now);
+                        return;
+                    case Resample::none: break;
+                }
+                switch (sampling)
+                {
+                    case Sampling::none:      sampling = Sampling::choosePad; return;
+                    case Sampling::choosePad: exitSampling (false); return;
+                    case Sampling::standby:   startRecording (false, now); return;
+                    case Sampling::recording:
+                        controller.stopRecording();
+                        exitSampling (false);
+                        busy (now);
+                        return;
+                }
                 return;
 
             default:
@@ -630,6 +970,10 @@ namespace spsx
 
         if (op.op != Op::none)
             endOp();
+        if (sampling != Sampling::none)
+            exitSampling (true);
+        if (resample != Resample::none)
+            exitResample (true);
         if (markSession)
         {
             markSession.reset();
@@ -693,6 +1037,8 @@ namespace spsx
         else
             controller.setPatternTempo (bpm);
 
+        if (sampling == Sampling::standby)
+            tempoSpecified = true;
         flash (bpmDisplay (bpm), now);
     }
 
@@ -797,10 +1143,16 @@ namespace spsx
         {
             case FuncSetting::autoTrig:     dev.autoTrigLevel = v; break;
             case FuncSetting::illumination: dev.illumination = v; break;
-            case FuncSetting::effectLimit:  dev.effectLimit = v == 1; break;
+            case FuncSetting::effectLimit:
+                dev.effectLimit = v == 1;
+                sendEngine (Command::Type::setEffectLimit, kNoPad, dev.effectLimit ? 1.0 : 0.0);
+                break;
             case FuncSetting::midiChannel:  dev.midiChannel = v + 1; break;
             case FuncSetting::midiSync:     dev.midiSync = v; break;
-            case FuncSetting::inputGain:    dev.inputGainDb = kInputGain[(size_t) v]; break;
+            case FuncSetting::inputGain:
+                dev.inputGainDb = kInputGain[(size_t) v];
+                sendEngine (Command::Type::setInputGainDb, kNoPad, dev.inputGainDb);
+                break;
             case FuncSetting::outputGain:   controller.setOutputGainDb (kOutputGain[(size_t) v]); break;
         }
     }
@@ -840,7 +1192,13 @@ namespace spsx
             else controller.setVolume (v);
             return;
         }
-        if (k == Knob::micLevel || sleeping || paused)
+        if (k == Knob::micLevel)
+        {
+            // MIC LEVEL cannot be turned fully down (p. 45): +6 dB to +46 dB.
+            sendEngine (Command::Type::setMicGainDb, kNoPad, 6.0 + 40.0 * v);
+            return;
+        }
+        if (sleeping || paused)
             return;
 
         if (op.op == Op::funcSetting)
@@ -855,14 +1213,35 @@ namespace spsx
         if (op.op != Op::none)
             return;
 
+        const int value127 = (int) std::lround (v * 127.0);
+
+        // While sampling, CTRL 3 is the digital input level (p. 19); while resampling it is
+        // the resample level (p. 26). CTRL 1 / 2 still control the effect.
+        if (k == Knob::ctrl3 && (sampling == Sampling::standby || sampling == Sampling::recording))
+        {
+            digitalLevelKnob = v;
+            sendEngine (Command::Type::setDigitalLevel, kNoPad, levelFromKnob (v));
+            flash (DisplayText::number (value127), now);
+            return;
+        }
+        if (k == Knob::ctrl3 && resample != Resample::none)
+        {
+            resampleLevelKnob = v;
+            Command c;
+            c.type = Command::Type::setResampleLevel;
+            c.value = levelFromKnob (v);
+            engine.post (c);
+            flash (DisplayText::number (value127), now);
+            return;
+        }
+
         if (edit != Edit::none)
         {
             turnInEdit (k, v, now);
             return;
         }
 
-        const int knobIdx = (int) k;   // ctrl1..3
-        const int value127 = (int) std::lround (v * 127.0);
+        const auto knobIdx = (size_t) k;   // ctrl1..3
 
         if (mfxHeld)
         {
@@ -871,11 +1250,14 @@ namespace spsx
             {
                 fx.mfxType = 1 + knobToIndex (v, 24);
                 flash (DisplayText::number (fx.mfxType), now);
+                syncEffect();
             }
             else if (k == Knob::ctrl1 && (fx.mfxType == 4 || fx.mfxType == 5))
             {
                 // FLANGER / PHASER hidden balance (p. 44).
-                fx.params[(size_t) (5 + fx.mfxType - 1)][3] = (float) v;
+                const int e = fx::mfxIndex (fx.mfxType);
+                fx.params[(size_t) e][3] = (float) v;
+                sendEffectParams (e);
                 flash (DisplayText::number (value127), now);
             }
             return;
@@ -884,16 +1266,17 @@ namespace spsx
         if (remainHeld)
         {
             if (! fx.preset) fx.preset = std::array<float, 3> { 0.5f, 0.5f, 0.5f };
-            (*fx.preset)[(size_t) knobIdx] = (float) v;
+            (*fx.preset)[knobIdx] = (float) v;
             flash (DisplayText::number (value127), now);
             return;
         }
 
-        if (fx.active >= 0)
+        const int effect = activeEffectIndex();
+        if (effect >= 0)
         {
-            const int table = fx.active == 5 ? 5 + fx.mfxType - 1 : fx.active;
-            fx.params[(size_t) table][(size_t) knobIdx] = (float) v;
-            flash (DisplayText::number (value127), now);
+            fx.params[(size_t) effect][knobIdx] = (float) v;
+            sendEffectParams (effect);
+            flash (fx::display (effect, (int) knobIdx, (float) v, engine.effectTempo()), now);
         }
     }
 
@@ -913,6 +1296,17 @@ namespace spsx
                     {
                         seq.metronomeLevel = (int) std::lround (v * 127.0);
                         flash (DisplayText::number (seq.metronomeLevel), now);
+                    }
+                    return;
+                }
+                if (currentIsExt)
+                {
+                    // EXT SOURCE LEVEL (p. 24).
+                    if (k == Knob::ctrl3)
+                    {
+                        extLevel = (int) std::lround (v * 127.0);
+                        sendEngine (Command::Type::setExtLevel, kNoPad, extLevel);
+                        flash (DisplayText::number (extLevel), now);
                     }
                     return;
                 }
@@ -950,12 +1344,14 @@ namespace spsx
             case Edit::timeBpm:
                 if (k == Knob::ctrl2)
                 {
-                    if (patternMode || ! hasSample (current))
+                    if (patternMode || ! hasSample (current) || sampling == Sampling::standby)
                     {
                         const double bpm = controller.limits().steppedTempo
                                                ? (double) tempo::fromIndex (knobToIndex (v, 127))
                                                : std::round ((40.0 + v * 160.0) * 10.0) / 10.0;
                         controller.setPatternTempo (bpm);
+                        if (sampling == Sampling::standby)
+                            tempoSpecified = true;
                         flash (bpmDisplay (bpm), now);
                     }
                     else
@@ -1029,6 +1425,20 @@ namespace spsx
             }
         }
 
+        // Recording stopped by the engine: "FUL" (2 GB per sample, p. 20) or a disk problem.
+        if ((sampling == Sampling::recording || resample == Resample::recording)
+            && engine.recordingPhase() == RecPhase::full)
+        {
+            flash ("FUL", now, 2.0);
+            controller.stopRecording();
+            if (sampling == Sampling::recording) exitSampling (false);
+            else                                 exitResample (false);
+        }
+        if (sampling == Sampling::recording && ! controller.isRecording())
+            exitSampling (false);
+        if (controller.isRecording() && sampling == Sampling::none && resample == Resample::none)
+            busy (now);   // writing / loading the new sample: the dot blinks
+
         // SLP: sleep after about five minutes without operation (p. 40).
         if (! sleeping && controller.project().device.illumination == 4 && now - lastActivity > kSleepSeconds)
         {
@@ -1057,9 +1467,28 @@ namespace spsx
             case Op::none:        break;
         }
 
+        // Sampling / resampling codes (p. 25, 26).
+        if (sampling == Sampling::recording)
+        {
+            switch (engine.recordingPhase())
+            {
+                case RecPhase::waitingTrigger: return DisplayText::make ("rdY");
+                case RecPhase::countIn:        return DisplayText::make ("-" + std::to_string (std::max (1, engine.countInBeat())) + "-");
+                case RecPhase::full:           return DisplayText::make ("FUL");
+                default:                       return DisplayText::make ("rEC");
+            }
+        }
+        if (sampling == Sampling::standby)
+            return bpmDisplay (controller.project().patternTempo);
+        if (resample == Resample::recording)
+            return DisplayText::make ("rEC");
+        if (resample != Resample::none)
+            return DisplayText::make ("LEU");
+
         switch (edit)
         {
             case Edit::startEndLevel:
+                if (currentIsExt) return DisplayText::number (extLevel);
                 if (patternMode) return DisplayText::number (seq.metronomeLevel);
                 return hasSample (current) ? DisplayText::number (controller.settings (current)->level) : DisplayText::make ("---");
             case Edit::timeBpm:
@@ -1071,6 +1500,8 @@ namespace spsx
 
         if (patternMode)
             return DisplayText::make ("Ptn");
+        if (currentIsExt)
+            return DisplayText::number (extLevel);
         // Idle: the current sample's BPM [SPEC U28, assumed].
         return sampleBpmDisplay();
     }
@@ -1120,8 +1551,10 @@ namespace spsx
         led (Control::mic, mic ? Led::on : Led::off);
         led (Control::func, funcHeld ? Led::on : Led::off);
 
-        // Current pad's SAMPLE MODE and MARK
-        if (hasSample (current) && ! patternMode)
+        // Current pad's SAMPLE MODE and MARK (EXT SOURCE shows its own GATE)
+        if (currentIsExt)
+            led (Control::gate, extGate ? Led::on : Led::off);
+        else if (hasSample (current) && ! patternMode)
         {
             const auto& slot = controller.project().slot (current);
             led (Control::gate, slot.settings.gate ? Led::on : Led::off);
@@ -1134,7 +1567,8 @@ namespace spsx
             led (Control::mark, Led::blink);
 
         // Banks: lit = A..E, blinking = F..J; blinking all while a bank must be chosen.
-        const bool chooseBank = (op.op == Op::delAll || op.op == Op::format) && op.stage == 0;
+        const bool chooseBank = ((op.op == Op::delAll || op.op == Op::format) && op.stage == 0)
+                                || resample == Resample::choosePad;
         for (int i = 0; i < 5; ++i)
         {
             Led l = Led::off;
@@ -1164,13 +1598,46 @@ namespace spsx
             case Op::none:        break;
         }
 
+        // Input, recording and EXT SOURCE
+        v.peak = engine.inputPeakLed() ? Led::on : Led::off;
+        v.illuminationOverload = engine.digitalOverload()
+                                 && (sampling == Sampling::standby || sampling == Sampling::recording || resample != Resample::none);
+        led (Control::extSource, extOn ? Led::on : Led::off);
+        led (Control::resample, resample != Resample::none ? Led::on : Led::off);
+        if (op.op == Op::none)
+        {
+            switch (sampling)
+            {
+                case Sampling::choosePad: led (Control::rec, Led::on); break;
+                case Sampling::standby:   led (Control::rec, Led::blink); break;
+                case Sampling::recording: led (Control::rec, engine.recordingPhase() == RecPhase::recording ? Led::on : Led::blink); break;
+                case Sampling::none:      break;
+            }
+            switch (resample)
+            {
+                case Resample::choosePad:
+                case Resample::padChosen: led (Control::rec, Led::blink); break;
+                case Resample::armed:
+                case Resample::recording: led (Control::rec, Led::on); break;
+                case Resample::active:
+                case Resample::none:      break;
+            }
+        }
+
         // Pads
+        const bool choosingRecordPad = sampling == Sampling::choosePad || resample == Resample::choosePad
+                                       || resample == Resample::padChosen;
         for (int i = 0; i < kPadsPerBank; ++i)
         {
             const PadId p = padAt (i);
             Led l = Led::off;
 
-            if (remainHeld && op.op == Op::none)
+            if (choosingRecordPad && op.op == Op::none)
+                l = p == recordDest && resample == Resample::padChosen ? Led::on
+                    : (! hasSample (p) && ! bankProtected (p.bank) ? Led::blink : Led::off);
+            else if ((sampling == Sampling::standby || sampling == Sampling::recording) && op.op == Op::none)
+                l = p == recordDest ? Led::on : Led::off;
+            else if (remainHeld && op.op == Op::none)
                 l = (fx.targetAll || fx.targets.test ((size_t) p.index())) ? Led::on : Led::off;
             else if (op.op == Op::copy || op.op == Op::exchange)
             {
