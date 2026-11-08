@@ -93,6 +93,7 @@ namespace spsx
         std::array<float, 4> params {};
         PadSettings settings {};
         std::int64_t time = -1;
+        std::uint32_t sequence = 0;   // set by Engine::schedule (keeps equal-time order)
     };
 
     /** Recorder phases, published for the panel (display codes rdY, -1-..-4-, rEC, FUL). */
@@ -266,6 +267,7 @@ namespace spsx
         static constexpr int kTimedSize = 4096;   // sequencer note-offs can be far ahead
         std::vector<Command> timed;
         int numTimed = 0;
+        std::uint32_t nextSequence = 0;
 
         // retired samples waiting until no voice uses them, then audio -> message
         static constexpr int kRetireSize = 256;

@@ -20,6 +20,7 @@ ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "
 - Linux needs: libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libjack-jackd2-dev.
 - Artefacts: `build/SPSX_artefacts/<Config>/{Standalone,VST3,AU}`.
 - Panel screenshot without a display: `build/tools/snapshot/panel_snapshot --out p.png [--extended] [--pad A1=kick.wav] [--script "press A1; turn ctrl3 0.7"]`.
+- CPU benchmark (Release build): `build-rel/tools/bench/spsx_bench 3`.
 - Headless render: `build/tools/render_cli/render_cli --pad A1=kick.wav --script hits.txt --out out.wav --rate 48000` (script format at the top of `tools/render_cli/main.cpp`).
 
 ## Layout
@@ -28,7 +29,7 @@ ctest --test-dir build --output-on-failure        # or ./build/tests/SPSXTests "
 - `src/ui/`: PanelLayout (geometry), PanelComponent (drawing + mouse), KeyMap, SidePanel (Extended).
 - `src/plugin/`: AudioProcessor (owns Engine, SamplerController, PanelModel) + editor.
 - `tests/`: Catch2; `AllocGuard.cpp` replaces operator new in the test binary to catch audio-thread allocations.
-- `tools/`: `render_cli`, `snapshot`, `slicer_patterns.py`, `fetch_manual.sh`.
+- `tools/`: `render_cli`, `snapshot`, `bench`, `slicer_patterns.py`, `fetch_manual.sh`.
 
 ## Conventions
 - Process: work phase by phase. End of phase: clean build, tests pass, update `docs/PROGRESS.md`, commit, **stop and wait for review**.

@@ -333,6 +333,9 @@ namespace spsx
             case Control::quantize:      if (patternMode) toggleEdit (Edit::quantize, now); break;
 
             case Control::patternSelect:
+                // Not while sampling or resampling: REC would change meaning mid-take.
+                if (sampling != Sampling::none || resample != Resample::none)
+                    break;
                 patternMode = ! patternMode;
                 tempDisplay.reset();
                 endOp();

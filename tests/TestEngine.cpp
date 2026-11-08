@@ -258,6 +258,44 @@ TEST_CASE ("Timed commands land on their exact sample", "[engine][timing]")
     REQUIRE (out.l[38] == 2.0f * kUnit);
 }
 
+TEST_CASE ("Timed commands scheduled out of order still land in time order", "[engine][timing]")
+{
+    Fixture f;
+    f.load (f.a1, makeRamp (1000));
+    f.load ({ 0, 1 }, makeRamp (1000));
+    render (f.e, 64);
+
+    auto late = cmd (Command::Type::padDown, f.a1);
+    late.time = f.e.now() + 50;
+    auto early = cmd (Command::Type::padDown, { 0, 1 });
+    early.time = f.e.now() + 20;
+    f.e.schedule (late);
+    f.e.schedule (early);
+    auto out = render (f.e, 128);
+    REQUIRE (out.l[19] == 0.0f);
+    REQUIRE (out.l[20] == kUnit);
+    REQUIRE (out.l[50] == 31.0f * kUnit + kUnit);   // A2 ramp at 31 plus A1 onset
+}
+
+TEST_CASE ("Timed commands due during PAUSE are held, not dropped", "[engine][pause][timing]")
+{
+    Fixture f;
+    f.load (f.a1, makeRamp (1000));
+    render (f.e, 64);
+    f.post (Command::Type::pause);
+    render (f.e, 64);
+
+    auto c = cmd (Command::Type::padDown, f.a1);
+    c.time = f.e.now() + 10;
+    f.e.schedule (c);
+    auto held = render (f.e, 256);
+    REQUIRE (peakOf (held.l) == 0.0f);
+
+    f.post (Command::Type::resume);
+    auto out = render (f.e, 64);
+    REQUIRE (out.l[0] == kUnit);
+}
+
 TEST_CASE ("Output gain feeds a hard clip in Authentic mode", "[engine][mixer]")
 {
     Fixture f;

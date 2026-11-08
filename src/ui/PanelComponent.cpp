@@ -123,24 +123,77 @@ namespace spsx::ui
         return false;
     }
 
+    juce::Colour PanelComponent::ringColour (const PanelView& v, double now) const noexcept
+    {
+        juce::Colour ring = juce::Colours::transparentBlack;
+        if (v.sleeping)
+            return ring;
+        const bool tempoOn = v.illuminationTempo && std::fmod (now * v.tempo / 60.0, 1.0) < 0.5;
+        switch (v.illumination)
+        {
+            case PanelView::Illumination::off:     break;
+            case PanelView::Illumination::red:     ring = kLit; break;
+            case PanelView::Illumination::blue:    ring = kRingBlue; break;
+            case PanelView::Illumination::redBlue: ring = (v.illuminationTempo && tempoOn) ? kLit : kRingBlue; break;
+        }
+        if (v.illuminationTempo && v.illumination != PanelView::Illumination::redBlue && ! tempoOn)
+            ring = ring.withMultipliedAlpha (0.25f);
+        if (v.illuminationOverload)
+            ring = kLit;
+        return ring;
+    }
+
+    juce::Rectangle<int> PanelComponent::screenBounds (juce::Rectangle<float> logical, float margin) const noexcept
+    {
+        return logical.expanded (margin).transformedBy (transform).getSmallestIntegerContainer().expanded (1);
+    }
+
     void PanelComponent::refresh (double now)
     {
-        auto next = model.view (now);
-        const int blinkPhase = (int) std::floor (now / 0.08);
-        const bool anyBlink = std::any_of (next.leds.begin(), next.leds.end(), [] (Led l) { return l == Led::blink || l == Led::blinkFast; })
-                              || next.busyDot || next.sleeping || next.illuminationTempo;
+        // Repaint only what visibly changed: blinking pads during playback no longer
+        // redraw the whole panel every phase.
+        const auto next = model.view (now);
+        const auto& L = PanelLayout::get();
+        juce::RectangleList<int> dirty;
 
-        if (next != view || (anyBlink && blinkPhase != lastBlinkPhase))
-        {
-            view = next;
-            viewTime = now;
-            repaint();
-        }
-        lastBlinkPhase = blinkPhase;
+        std::array<bool, kNumControls> lit {};
+        for (int i = 0; i < kNumControls; ++i)
+            lit[(size_t) i] = ! next.sleeping && ledIsLit (next.leds[(size_t) i], now);
+        for (auto& c : L.controls)
+            if (firstRefresh || lit[(size_t) c.control] != shownLit[(size_t) c.control])
+                dirty.add (screenBounds (c.bounds, 10.0f));
+
+        for (auto& k : L.knobs)
+            if (firstRefresh || ! juce::exactlyEqual (next.knobs[(size_t) k.knob], view.knobs[(size_t) k.knob]))
+                dirty.add (screenBounds ({ k.centre.x - k.radius, k.centre.y - k.radius, k.radius * 2, k.radius * 2 }, 6.0f));
+
+        if (firstRefresh || next.peak != view.peak)
+            dirty.add (screenBounds ({ L.peakLed.x - 10, L.peakLed.y - 10, 20, 20 }, 2.0f));
+
+        // Display + illumination ring: a key over everything that changes their pixels.
+        std::uint32_t key = 0;
+        for (size_t d = 0; d < 3; ++d)
+            key = key * 131u + (std::uint8_t) next.display.cells[d] * 2u + (next.display.dots[d] ? 1u : 0u);
+        key = key * 7u + (next.busyDot && std::fmod (now, 0.3) < 0.15 ? 1u : 0u);
+        key = key * 7u + (next.sleeping ? 1u + (std::uint32_t) ((int) std::floor (now / 0.3) % 3) : 0u);
+        const auto ring = ringColour (next, now);
+        if (firstRefresh || key != shownDisplayKey || ring != shownRing)
+            dirty.add (screenBounds ({ L.displayCentre.x - L.displayRadius - 12, L.displayCentre.y - L.displayRadius - 12,
+                                       (L.displayRadius + 12) * 2, (L.displayRadius + 12) * 2 }, 2.0f));
+
+        view = next;
+        viewTime = now;
+        shownLit = lit;
+        shownDisplayKey = key;
+        shownRing = ring;
+        firstRefresh = false;
+        for (const auto& r : dirty)
+            repaint (r);
     }
 
     void PanelComponent::resized()
     {
+        firstRefresh = true;
         const auto w = (float) getWidth(), h = (float) getHeight();
         scale = std::min (w / PanelLayout::kWidth, h / PanelLayout::kHeight);
         const float ox = (w - PanelLayout::kWidth * scale) * 0.5f;
@@ -382,22 +435,7 @@ namespace spsx::ui
         const auto c = L.displayCentre;
 
         // Illumination ring around the display face.
-        juce::Colour ring = juce::Colours::transparentBlack;
-        if (! view.sleeping)
-        {
-            const bool tempoOn = view.illuminationTempo && std::fmod (now * view.tempo / 60.0, 1.0) < 0.5;
-            switch (view.illumination)
-            {
-                case PanelView::Illumination::off:     break;
-                case PanelView::Illumination::red:     ring = kLit; break;
-                case PanelView::Illumination::blue:    ring = kRingBlue; break;
-                case PanelView::Illumination::redBlue: ring = (view.illuminationTempo && tempoOn) ? kLit : kRingBlue; break;
-            }
-            if (view.illuminationTempo && view.illumination != PanelView::Illumination::redBlue && ! tempoOn)
-                ring = ring.withMultipliedAlpha (0.25f);
-            if (view.illuminationOverload)
-                ring = kLit;
-        }
+        const auto ring = ringColour (view, now);
         if (! ring.isTransparent())
         {
             for (int i = 0; i < 4; ++i)

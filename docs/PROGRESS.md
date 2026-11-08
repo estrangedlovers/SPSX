@@ -1,5 +1,30 @@
 # PROGRESS
 
+## Phase 5: Pattern sequencer, plus a review and optimisation pass (status: done, awaiting review)
+
+### Done
+- **Sequencer** (`src/core/engine/Sequencer`, `src/core/state/PatternData.h`): 96 PPQN patterns with their own tempo and note lengths; events go to the engine's timed queue at exact sample times; loop, reserve at pattern end, SUB PAD immediate switch, stop, HOLD + pad arm.
+- **Pattern recording**: standby metronome, one-bar count-in, loop overdub, 10 quantize grids with shuffle applied at record time, rehearsal, erase (pad or HOLD = all), length rules, 16,000-note limit, CANCEL commits.
+- **Panel**: PATTERN SELECT play / reserve / stop, REC flow, LENGTH, QUANTIZE, metronome level, TIME/BPM per pattern, pattern delete / copy / exchange, displays (Ptn, -4..-1, M.b, rEH, ErS), tempo-blinking ring.
+- **Plugin**: host tempo drives the sequencer; HOLD + pattern pad starts with the host transport (SPEC U50).
+- Patterns saved with the project (JSON).
+- New working decisions U44 to U51 in SPEC section 14.
+
+### Review and optimisation pass
+- **Stability**: PAUSE used to drop timed events that fell due while paused, which could leave sequencer notes stuck on. Timed events are now held and the sequencer is frozen until resume. PATTERN SELECT is ignored while sampling or resampling, so REC cannot change meaning mid-take.
+- **Speed**: the timed queue is a binary heap (O(log n) insert instead of a sorted shift; ties keep insertion order). The sample-rate converter interpolates each coefficient row once and shares it across channels. The panel repaints only the controls, knobs, PEAK LED and display whose pixels changed, instead of the whole panel on every blink.
+- **Benchmark** (`tools/bench`, Release, `spsx_bench 3`): each effect alone stays under about 1.1 % of one core at 44.1 kHz / 256. Worst case (12 voices, effect on all, dense pattern): 1.4 % at 44.1 kHz, 2.4 % at 48 kHz / 128 with sample-rate conversion. Run-to-run variation on this shared machine is around 0.3 points.
+- Tests: 131 test cases, all passing (new: out-of-order timed commands, timed commands held through PAUSE).
+
+### Known issues
+- The UI is still reviewed only from headless renders; please check it on your Mac.
+- MIDI (Phase 6) is not wired yet; host sync uses the plugin play head only.
+
+### Next
+Phase 6: MIDI.
+
+---
+
 ## Phases 3 and 4: Effects, sampling, EXT SOURCE, resample (status: done, released as v0.4.0)
 
 ### Done

@@ -45,13 +45,19 @@ namespace spsx::ui
         void drawDisplay (juce::Graphics& g, double now) const;
         void drawKeyLabels (juce::Graphics& g) const;
         bool ledIsLit (Led l, double now) const noexcept;
+        juce::Colour ringColour (const PanelView& v, double now) const noexcept;
+        juce::Rectangle<int> screenBounds (juce::Rectangle<float> logical, float margin) const noexcept;
         juce::Point<float> toLogical (juce::Point<float> p) const noexcept { return p.transformedBy (transform.inverted()); }
         double nowSeconds() const noexcept;
 
         PanelModel& model;
         PanelView view;
         double viewTime = 0.0;
-        int lastBlinkPhase = -1;
+        // What is visibly on screen, to repaint only what changed.
+        std::array<bool, kNumControls> shownLit {};
+        juce::Colour shownRing;
+        std::uint32_t shownDisplayKey = 0;
+        bool firstRefresh = true;
 
         juce::AffineTransform transform;
         float scale = 1.0f;

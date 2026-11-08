@@ -49,7 +49,7 @@ namespace spsx::dsp
             {
                 const double f = (double) p / kPhases;
                 double sum = 0.0;
-                float* row = table.data() + (size_t) p * (size_t) taps;
+                float* tab = table.data() + (size_t) p * (size_t) taps;
 
                 for (int j = 0; j < taps; ++j)
                 {
@@ -57,15 +57,16 @@ namespace spsx::dsp
                     const double x = 2.0 * cutoff * d;
                     const double sinc = std::abs (x) < 1e-12 ? 1.0 : std::sin (kPi * x) / (kPi * x);
                     const double w = kaiser (d / (double) halfTaps);
-                    row[j] = (float) (2.0 * cutoff * sinc * w);
-                    sum += row[j];
+                    tab[j] = (float) (2.0 * cutoff * sinc * w);
+                    sum += tab[j];
                 }
 
                 // Normalise DC gain per phase so a constant input stays exactly constant.
                 for (int j = 0; j < taps; ++j)
-                    row[j] = (float) (row[j] / sum);
+                    tab[j] = (float) (tab[j] / sum);
             }
 
+            row.assign ((size_t) taps, 0.0f);
             capacity = maxInputPerPush + 4 * taps + 64;
             history.assign ((size_t) numChannels, std::vector<float> ((size_t) capacity, 0.0f));
             reset();
@@ -122,12 +123,18 @@ namespace spsx::dsp
                 const float* r1   = r0 + taps;
                 const int    base = i - halfTaps + 1;
 
+                // Interpolate the coefficient row once, shared by all channels; the dot
+                // products below then vectorise.
+                float* coef = row.data();
+                for (int j = 0; j < taps; ++j)
+                    coef[j] = r0[j] + a * (r1[j] - r0[j]);
+
                 for (int ch = 0; ch < numChannels; ++ch)
                 {
                     const float* x = history[(size_t) ch].data() + base;
                     float acc = 0.0f;
                     for (int j = 0; j < taps; ++j)
-                        acc += x[j] * (r0[j] + a * (r1[j] - r0[j]));
+                        acc += x[j] * coef[j];
                     out[ch][k] = acc;
                 }
 
@@ -182,6 +189,7 @@ namespace spsx::dsp
         int buffered = 0;
         double readTime = 0.0;
         std::vector<float> table;
+        std::vector<float> row;
         std::vector<std::vector<float>> history;
     };
 }

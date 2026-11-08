@@ -167,19 +167,27 @@ namespace spsx
 
     // ---- audio thread ------------------------------------------------------------------
 
+    namespace
+    {
+        /** Min-heap order on (time, sequence): earliest first, FIFO for equal times. */
+        struct TimedLater
+        {
+            bool operator() (const Command& a, const Command& b) const noexcept
+            {
+                return a.time != b.time ? a.time > b.time : a.sequence > b.sequence;
+            }
+        };
+    }
+
     void Engine::schedule (const Command& c) noexcept
     {
+        // Binary heap: O(log n) per event even with thousands of pending note-offs.
         if (numTimed >= kTimedSize)
-            return;   // queue full: drop (cannot allocate here)
-
-        int i = numTimed;
-        while (i > 0 && timed[(size_t) (i - 1)].time > c.time)
-        {
-            timed[(size_t) i] = timed[(size_t) (i - 1)];
-            --i;
-        }
-        timed[(size_t) i] = c;
+            return;   // full: drop (cannot allocate here)
+        timed[(size_t) numTimed] = c;
+        timed[(size_t) numTimed].sequence = nextSequence++;
         ++numTimed;
+        std::push_heap (timed.begin(), timed.begin() + numTimed, TimedLater {});
     }
 
     void Engine::process (const float* const* in, int numIn, float* const* out, int numOut, int n) noexcept
@@ -222,23 +230,27 @@ namespace spsx
             if (const auto* p = patternTable[(size_t) seq.playingIndex()])
                 patternTempo = p->tempo;
         seqTempoFlag.store (patternTempo, std::memory_order_relaxed);
-        seq.process (time, n, patternTempo, [this] (const Sequencer::Event& e)
+        // PAUSE freezes the sequencer too (p. 12).
+        if (! paused)
         {
-            Command c;
-            c.time = e.time;
-            if (e.kind == Sequencer::Event::Kind::click)
+            seq.process (time, n, patternTempo, [this] (const Sequencer::Event& e)
             {
-                c.type = Command::Type::click;
-                c.value = e.accent ? 1.0 : 0.0;
-            }
-            else
-            {
-                c.type = e.kind == Sequencer::Event::Kind::padDown ? Command::Type::padDown : Command::Type::padUp;
-                c.pad = PadId::fromIndex (e.pad);
-                c.index = 1;   // from the sequencer: never recorded back
-            }
-            schedule (c);
-        });
+                Command c;
+                c.time = e.time;
+                if (e.kind == Sequencer::Event::Kind::click)
+                {
+                    c.type = Command::Type::click;
+                    c.value = e.accent ? 1.0 : 0.0;
+                }
+                else
+                {
+                    c.type = e.kind == Sequencer::Event::Kind::padDown ? Command::Type::padDown : Command::Type::padUp;
+                    c.pad = PadId::fromIndex (e.pad);
+                    c.index = 1;   // from the sequencer: never recorded back
+                }
+                schedule (c);
+            });
+        }
 
         updateEffectTempo();
 
@@ -246,15 +258,17 @@ namespace spsx
         int done = 0;
         while (done < n)
         {
-            while (numTimed > 0 && timed[0].time <= time)
+            // While paused, timed events wait (they run, late, on resume) so no note-off is
+            // lost and no GATE voice is left hanging.
+            while (! paused && numTimed > 0 && timed[0].time <= time)
             {
-                execute (timed[0]);
-                std::move (timed.begin() + 1, timed.begin() + numTimed, timed.begin());
+                std::pop_heap (timed.begin(), timed.begin() + numTimed, TimedLater {});
                 --numTimed;
+                execute (timed[(size_t) numTimed]);
             }
 
             int segment = n - done;
-            if (numTimed > 0)
+            if (! paused && numTimed > 0)
                 segment = (int) std::min<std::int64_t> (segment, timed[0].time - time);
 
             const float* inSeg[2] = { numIn > 0 && in != nullptr && in[0] != nullptr ? in[0] + done : nullptr,
